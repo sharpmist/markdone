@@ -1,0 +1,287 @@
+#!/usr/bin/env zsh
+# t - personal todo list kept as one Markdown file.
+# Run `t help` for usage. Configured with environment variables (see README.md):
+#   TODO_FILE       the list (default: ~/todo/Todo.md)
+#   TODO_JIRA_KEYS  Jira project keys to link, space-separated, e.g. "PROJ OPS"; empty = no links
+#   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
+
+zmodload zsh/datetime || exit 1
+
+f="${TODO_FILE:-$HOME/todo/Todo.md}"
+
+# Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
+# text. check_jira validates both before the list is read.
+JIRA_URL="${TODO_JIRA_URL:-}"
+JIRA_KEYS="${TODO_JIRA_KEYS:-}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  t [list]                  list open items, numbered          (aliases: ls, l)
+  t list --today | --later  list only Today's or Later's open items (same numbers as t list)
+  t list --done [--all]     list done items, newest first; --all includes the archives
+  t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
+  t done <n>                mark item n done                   (alias: d)
+  t today <n>               move item n from Later to Today    (alias: promote)
+  t later <n>               move item n from Today to Later    (alias: demote)
+  t pick                    choose an item with fzf, mark done (alias: f)
+  t edit                    open the list in $EDITOR           (alias: e)
+  t help                    show this help                     (-h, --help)
+  t commands                list commands with examples, tab-separated (used by Tab completion)
+
+Commands that read the list first tidy it: items ticked in an editor get
+today's date and move to Done; Done items older than 7 days move to
+"Archive <year>.md" next to the list; Jira keys like PROJ-123 become links
+when TODO_JIRA_KEYS and TODO_JIRA_URL are set.
+EOF
+}
+
+# linkify [all]: turn bare Jira keys into Markdown links. Only touches item lines
+# ("- [ ] " / "- [x] ") unless "all" is given. Existing links, URLs and `code` are left alone.
+# Passes input through unchanged when Jira linking is off (see check_jira).
+linkify() {
+  if [[ -z $JIRA_KEYS ]]; then cat; return; fi
+  T_ALL="$1" T_URL="$JIRA_URL" T_KEYS="$JIRA_KEYS" perl -pe '
+    BEGIN { $k = join "|", map quotemeta, split " ", $ENV{T_KEYS}; $u = $ENV{T_URL} }
+    next unless $ENV{T_ALL} || /^- \[[ x]\] /;
+    s{(\[[^\]]*\]\([^)]*\)|`[^`]*`|https?://\S+)|(?<![\w/-])((?:$k)-\d+)(?![\w-])}{defined $1 ? $1 : "[$2]($u$2)"}ge'
+}
+
+# render: on a terminal, show [text](url) as clickable "text" (OSC 8); otherwise pass through unchanged.
+render() {
+  if [[ -t 1 ]]; then
+    perl -pe 's{\[([^\]]+)\]\((https?://[^)\s]+)\)}{\e]8;;$2\e\\$1\e]8;;\e\\}g'
+  else
+    cat
+  fi
+}
+
+warn() { print -r -- "t: $*" >&2; }
+die() { warn "$@"; exit 1; }
+
+# days_ago <n>: the date n days ago as YYYY-MM-DD. Counts back from today's noon, so a daylight
+# saving change in between can't shift the date. Pure zsh, so BSD and GNU date don't matter.
+days_ago() {
+  local noon
+  strftime -r -s noon '%F %T' "$(strftime %F $EPOCHSECONDS) 12:00:00" && strftime %F $(( noon - $1 * 86400 ))
+}
+
+# check_jira: Jira linking is on when TODO_JIRA_KEYS is non-empty. Turns it off, with a warning,
+# when the keys or the URL are wrong, so broken links are never written into the list.
+check_jira() {
+  local k bad=()
+  JIRA_KEYS=${(j: :)${=JIRA_KEYS}}   # trim; blank means off
+  [[ -n $JIRA_KEYS ]] || return 0
+  for k in ${=JIRA_KEYS}; do [[ $k =~ '^[A-Z][A-Z0-9_]*$' ]] || bad+=("$k"); done
+  if (( $#bad )); then
+    warn "TODO_JIRA_KEYS: '${(j:', ':)bad}' isn't a Jira project key (use uppercase keys separated by spaces); Jira linking is off"
+    JIRA_KEYS=
+  elif [[ -z $JIRA_URL ]]; then
+    warn "TODO_JIRA_KEYS is set but TODO_JIRA_URL isn't; Jira linking is off"
+    JIRA_KEYS=
+  elif [[ $JIRA_URL != http(s|)://?*/ ]]; then
+    warn "TODO_JIRA_URL must start with http:// or https:// and end with / (got '$JIRA_URL'); Jira linking is off"
+    JIRA_KEYS=
+  fi
+  return 0
+}
+
+# save <tmp> [more temp files]: rewrite the list with <tmp> in place (keeps the file itself, so
+# symlinks and permissions survive; not atomic). On failure removes the temp files and exits.
+save() {
+  cat "$1" >"$f" && return 0
+  rm -f "$@"; die "could not write $f"
+}
+
+# commands: one line per command, "<text to insert after t>\t<description and example>".
+# shell/t.zsh shows these in fzf on Tab; an insert ending in "" puts the cursor between the quotes.
+commands() {
+  local ins shown desc ex
+  for ins shown desc ex in \
+    'list'              'list'                 'List open items, numbered'                'list' \
+    'list --today'      'list --today'         "List only Today's open items"             'list --today' \
+    'list --later'      'list --later'         "List only Later's open items"             'list --later' \
+    'list --done'       'list --done'          'List items done in the last 7 days'       'list --done' \
+    'list --done --all' 'list --done --all'    'List all done items, incl. archives'      'list --done --all' \
+    'add ""'            'add "<text>"'         'Add an item to Today'                     'add "Retest logout fix PROJ-123"' \
+    'add --later ""'    'add --later "<text>"' 'Add an item to Later'                     'add --later "Clean up old branches"' \
+    'done '             'done <n>'             'Mark item n done (n from t list)'         'done 2' \
+    'today '            'today <n>'            'Move item n from Later to Today'          'today 3' \
+    'later '            'later <n>'            'Move item n from Today to Later'          'later 1' \
+    'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
+    'edit'              'edit'                 'Open the list in your editor'             'edit' \
+    'help'              'help'                 'Show help'                                'help'
+  do
+    printf '%s\t%-22s %-42s e.g. t %s\n' "$ins" "$shown" "$desc" "$ex"
+  done
+}
+
+tidy() {
+  local tmp arch lnk y af rc cutoff ok=1
+  cutoff=$(days_ago 7)
+  if [[ $cutoff != <->-<->-<-> ]]; then
+    warn "can't work out the date 7 days ago; old Done items not archived"
+    cutoff=   # nothing compares lower, so nothing is archived
+  fi
+  tmp=$(mktemp); arch=$(mktemp); lnk=$(mktemp)
+  if ! linkify <"$f" >"$lnk"; then
+    rm -f "$tmp" "$arch" "$lnk"; die "Jira linking failed (is perl installed?); list not changed"
+  fi
+  awk -v today="$(date +%F)" -v cutoff="$cutoff" -v arch="$arch" '
+    function stamp(l) {
+      if (substr(l,7,10) !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) l = "- [x] " today " " substr(l,7)
+      return l
+    }
+    function keep(l) { if (substr(l,7,10) < cutoff) print l > arch; else print l }
+    $0=="## Done" { print; done=1; for (i=1; i<=nm; i++) keep(moved[i]); nm=0; next }
+    /^## /        { done=0 }
+    /^- \[x\] / && !done { moved[++nm]=stamp($0); next }
+    /^- \[x\] / && done  { keep(stamp($0)); next }
+    { print }
+    END { exit (nm > 0) }' "$lnk" >"$tmp"; rc=$?
+  if (( rc )); then
+    warn "ticked items found but no '## Done' heading after them; list not tidied"
+  elif ! cmp -s "$tmp" "$f"; then
+    # Append to the archives first and rewrite the list only if all of that worked: a crash or
+    # failed write in between can duplicate an archived item, but never lose one.
+    for y in $(cut -c7-10 "$arch" | sort -u); do
+      af="${f:h}/Archive $y.md"
+      if ! { [[ -f $af ]] || printf '# Archive %s\n\n' "$y" >"$af"; } ||
+         ! grep "^- \[x\] $y-" "$arch" | sort >>"$af"; then
+        ok=0; break
+      fi
+    done
+    if (( ok )); then save "$tmp" "$arch" "$lnk"
+    else warn "could not write $af; list not tidied"
+    fi
+  fi
+  rm -f "$tmp" "$arch" "$lnk"
+}
+
+# list [section]: open items, numbered across the whole list; with a section, only that section's
+# items are shown, keeping the same numbers so they work with done/today/later.
+list() {
+  awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) printf "%3d  %-6s %s\n", n, sec, substr($0,7)}' "$f" | render
+}
+
+# list_done <all>: done items as "DATE  text", newest first. Runs after tidy, so every item has a date.
+list_done() {
+  local a
+  {
+    awk '/^## /{indone=($0=="## Done")} indone && /^- \[x\] /' "$f"
+    if (( $1 )); then
+      for a in "${f:h}"/Archive\ <->.md(N); do grep '^- \[x\] ' "$a"; done
+    fi
+  } | sort -s -r -k3,3 | awk '{print substr($0,7,10) "  " substr($0,18)}' | render
+}
+
+# insert_item <section> <text> <numfile>: copy stdin to stdout with "- [ ] <text>" appended to the
+# end of <section>, before its trailing blank lines, and write the item's new number to <numfile>.
+# Fails when the section heading is missing.
+insert_item() {
+  T_TEXT="$2" awk -v sec="## $1" -v out="$3" '
+    function ins() { print "- [ ] " ENVIRON["T_TEXT"]; print n+1 > out; added=1 }
+    function flush() { printf "%s", blanks; blanks="" }
+    insec && !added && /^## / { ins(); flush(); insec=0 }
+    insec && !added && /^[ \t]*$/ { blanks = blanks $0 "\n"; next }
+    insec && !added { flush() }
+    /^- \[ \] / { n++ }
+    $0==sec && !added { insec=1 }
+    { print }
+    END { if (insec && !added) { ins(); flush() } exit !added }'
+}
+
+# add <section> <text>
+add() {
+  local sec=$1 text=$2 tmp out
+  [[ -n $text ]] || die "usage: t add [--later] <text>"
+  [[ $text != *$'\n'* ]] || die "item must be a single line"
+  text=$(print -r -- "$text" | linkify all) || die "Jira linking failed (is perl installed?); nothing added"
+  tmp=$(mktemp); out=$(mktemp)
+  if insert_item "$sec" "$text" "$out" <"$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Added $(<"$out") ($sec): $text" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no '## $sec' heading in $f"
+  fi
+}
+
+finish() {
+  local n=$1 tmp out
+  [[ $n == <-> ]] || die "usage: t done <n>"
+  tmp=$(mktemp); out=$(mktemp)
+  if awk -v N="$n" -v D="$(date +%F)" -v out="$out" '
+      NR==FNR { if (/^- \[ \] / && ++c==N) item=substr($0,7); next }
+      /^- \[ \] / && ++m==N { next }
+      { print }
+      $0=="## Done" && item!="" && !ok { print "- [x] " D " " item; print item > out; ok=1 }
+      END { exit !ok }' "$f" "$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Done: $(<"$out")" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no open item $n (or no '## Done' heading)"
+  fi
+}
+
+# move <section> <command> <n>: move open item n to the end of <section> (Today or Later), in one write.
+move() {
+  local to=$1 cmd=$2 n=$3 found sec item tmp out
+  [[ $n == <-> ]] || die "usage: t $cmd <n>"
+  found=$(awk -v N="$n" '/^## /{sec=substr($0,4)} /^- \[ \] / && ++c==N {print sec "\t" substr($0,7); exit}' "$f")
+  [[ -n $found ]] || die "no open item $n"
+  sec=${found%%$'\t'*}; item=${found#*$'\t'}
+  [[ $sec != $to ]] || die "item $n is already in $to"
+  tmp=$(mktemp); out=$(mktemp)
+  if awk -v N="$n" '/^- \[ \] / && ++c==N {next} {print}' "$f" | insert_item "$to" "$item" "$out" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Moved to $to as $(<"$out"): $item" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no '## $to' heading in $f"
+  fi
+}
+
+# Commands that don't need the list.
+case "$1" in
+  -h|--help|help) usage; exit 0 ;;
+  commands) commands; exit 0 ;;
+esac
+
+[[ -f $f ]] || die "$f not found; create it with the headings '## Today', '## Later' and '## Done' (see README.md), or set TODO_FILE"
+check_jira
+tidy
+
+case "$1" in
+  ""|list|ls|l)
+    (( $# )) && shift
+    show_done=0; show_all=0; show_today=0; show_later=0
+    for opt in "$@"; do
+      case $opt in
+        --done) show_done=1 ;;
+        --all) show_all=1 ;;
+        --today) show_today=1 ;;
+        --later) show_later=1 ;;
+        *) die "unknown option '$opt' for list (expected --today, --later, --done, --all)" ;;
+      esac
+    done
+    (( show_all && !show_done )) && die "--all only works together with --done"
+    (( show_done && (show_today || show_later) )) && die "--today and --later list open items; they don't combine with --done"
+    if (( show_done )); then list_done $show_all
+    elif (( show_today && !show_later )); then list Today
+    elif (( show_later && !show_today )); then list Later
+    else list
+    fi ;;
+  add|a)
+    shift
+    if [[ $1 == (--later|-l) ]]; then shift; add Later "$*"; else add Today "$*"; fi ;;
+  done|d) finish "$2" ;;
+  today|promote) move Today today "$2" ;;
+  later|demote)  move Later later "$2" ;;
+  pick|f)
+    pick=$(list | fzf --prompt='done> ') || exit
+    finish "$(awk '{print $1}' <<<"$pick")" ;;
+  edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
+  *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
+esac

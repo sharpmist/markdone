@@ -1,0 +1,401 @@
+#!/usr/bin/env zsh
+# Runs bin/t against throwaway files and checks output, exit codes and file contents.
+# Usage: test/run.zsh   (exits non-zero if any check fails)
+
+T_BIN="${0:A:h:h}/bin/t"
+zmodload zsh/datetime
+days_ago() { local noon; strftime -r -s noon '%F %T' "$(strftime %F $EPOCHSECONDS) 12:00:00"; strftime %F $(( noon - $1 * 86400 )); }
+today=$(date +%F); d7=$(days_ago 7); d8=$(days_ago 8)
+export TODO_JIRA_URL="https://jira.example.com/browse/" TODO_JIRA_KEYS="PROJ OPS WEB"
+pass=0; fail=0
+
+check() { # <name> <expected> <actual>
+  if [[ "$2" == "$3" ]]; then (( pass++ ))
+  else (( fail++ )); print -r -- "FAIL: $1"; print -r -- "  expected: ${(q+)2}"; print -r -- "  actual:   ${(q+)3}"; fi
+}
+run() { out=$("$T_BIN" "$@" 2>&1); rc=$?; }  # sets $out and $rc
+dirs=(); trap 'chmod -R u+w $dirs 2>/dev/null; rm -rf $dirs' EXIT
+# bin/t runs under zsh, which reads $ZDOTDIR/.zshenv (default ~/.zshenv) on every start. Point it at
+# an empty dir so the user's TODO_* settings can't override the test's, or send t to the real list.
+export ZDOTDIR=$(mktemp -d); dirs+=$ZDOTDIR
+fresh() { dir=$(mktemp -d); dirs+=$dir; export TODO_FILE="$dir/Todo.md"; print -rn -- "$1" >"$TODO_FILE"; }
+file() { cat "$TODO_FILE"; }
+EMPTY=$'## Today\n\n## Later\n\n## Done\n'
+
+# --- adding and listing ---
+fresh "$EMPTY"
+run;                          check "list empty"            "" "$out"
+run add first;                check "add"                   "Added 1 (Today): first" "$out"
+run add --later "some day";   check "add --later"           "Added 2 (Later): some day" "$out"
+run a -l short;               check "alias a -l"            "Added 3 (Later): short" "$out"
+run a second;                 check "add goes to end of Today, numbered" "Added 2 (Today): second" "$out"
+weird='Ticket & "quotes" back\slash \n $HOME `x`'
+run add "$weird";             check "special characters echoed as typed" "Added 3 (Today): $weird" "$out"
+run list
+check "list" "  1  Today  first
+  2  Today  second
+  3  Today  $weird
+  4  Later  some day
+  5  Later  short" "$out"
+run ls; out2=$out; run l;     check "list aliases" "$out2" "$out"
+
+# --- done ---
+run done 2;                   check "done"                  "Done: second" "$out"
+run d 2;                      check "alias d"               "Done: $weird" "$out"
+check "file after adds and dones" "## Today
+- [ ] first
+
+## Later
+- [ ] some day
+- [ ] short
+
+## Done
+- [x] $today $weird
+- [x] $today second
+" "$(file)"$'\n'
+
+# --- errors leave the file untouched ---
+before=$(file)
+for args in "add" "add --later" "done" "done x" "done 99" "bogus"; do
+  run ${=args}; check "'t $args' fails" 1 "$rc"
+done
+run add "$(printf 'two\nlines')"; check "multi-line add fails" 1 "$rc"
+check "file unchanged after errors" "$before" "$(file)"
+run help;  check "help exits 0" 0 "$rc"; [[ $out == *"t add [--later] <text>"* ]]; check "help text" 0 $?
+run --help; check "--help exits 0" 0 "$rc"
+
+# --- tidy: dating, moving and archiving ---
+fresh "## Today
+- [ ] Open one
+- [x] Ticked in an editor
+
+## Later
+- [x] $d8 Old ticked later
+
+## Done
+- [x] $d7 Seven days
+- [x] Undated
+- [x] $d8 Eight days
+- [x] 2020-05-01 Ancient
+"
+y=${d8[1,4]}
+printf '# Archive %s\n\n- [x] %s-01-01 Existing\n' "$y" "$y" >"$dir/Archive $y.md"
+run
+check "tidy list output" "  1  Today  Open one" "$out"
+check "tidy list file" "## Today
+- [ ] Open one
+
+## Later
+
+## Done
+- [x] $today Ticked in an editor
+- [x] $d7 Seven days
+- [x] $today Undated" "$(file)"
+check "archive appended and sorted" "# Archive $y
+
+- [x] $y-01-01 Existing
+- [x] $d8 Eight days
+- [x] $d8 Old ticked later" "$(<"$dir/Archive $y.md")"
+check "archive per year" "# Archive 2020
+
+- [x] 2020-05-01 Ancient" "$(<"$dir/Archive 2020.md")"
+before=$(file); run; check "second run changes nothing" "$before" "$(file)"
+
+# a failed archive write keeps the item in the list
+fresh "## Today
+- [x] Ticked
+
+## Done
+- [x] 2020-06-01 Old item
+"
+printf '# Archive 2020\n\n' >"$dir/Archive 2020.md"; chmod a-w "$dir/Archive 2020.md"
+before=$(file); run
+[[ $out == *"t: could not write $dir/Archive 2020.md; list not tidied"* ]]
+check "archive write failure: warns" 0 $?
+check "archive write failure: list untouched" "$before" "$(file)"
+check "archive write failure: archive untouched" $'# Archive 2020\n' "$(<"$dir/Archive 2020.md")"$'\n'
+chmod u+w "$dir/Archive 2020.md"
+run; check "archives once writable again" "- [x] 2020-06-01 Old item" "$(grep Old "$dir/Archive 2020.md")"
+
+# --- today: move an item from Later to Today ---
+fresh "## Today
+- [ ] A
+
+## Later
+- [ ] B
+- [ ] C PROJ-5
+
+## Done
+"
+run today 3
+check "today moves item to the end of Today" "Moved to Today as 2: C [PROJ-5](https://jira.example.com/browse/PROJ-5)" "$out"
+run promote 3
+check "promote alias; numbers come from the current list" "Moved to Today as 3: B" "$out"
+check "file after moving both" "## Today
+- [ ] A
+- [ ] C [PROJ-5](https://jira.example.com/browse/PROJ-5)
+- [ ] B
+
+## Later
+
+## Done" "$(file)"
+before=$(file)
+run today 1;  check "item already in Today fails" "t: item 1 is already in Today" "$out"
+run today 9;  check "today with no such item fails" 1 "$rc"
+run today x;  check "today with a non-number fails" 1 "$rc"
+run today;    check "today without a number fails" 1 "$rc"
+check "file unchanged after failed moves" "$before" "$(file)"
+fresh $'## Later\n- [ ] B\n\n## Done\n'
+run today 1; check "today without a Today heading fails" 1 "$rc"
+check "item not lost when Today is missing" $'## Later\n- [ ] B\n\n## Done' "$(file)"
+
+# --- later: move an item from Today to Later ---
+fresh "## Today
+- [ ] A
+- [ ] B
+
+## Later
+- [ ] C
+
+## Done
+"
+run later 1;  check "later moves item to the end of Later" "Moved to Later as 3: A" "$out"
+run demote 1; check "demote alias; numbers come from the current list" "Moved to Later as 3: B" "$out"
+check "file after moving both" "## Today
+
+## Later
+- [ ] C
+- [ ] A
+- [ ] B
+
+## Done" "$(file)"
+before=$(file)
+run later 1;  check "item already in Later fails" "t: item 1 is already in Later" "$out"
+run later 9;  check "later with no such item fails" 1 "$rc"
+run later;    check "later without a number fails" "t: usage: t later <n>" "$out"
+check "file unchanged after failed moves" "$before" "$(file)"
+fresh $'## Today\n- [ ] A\n\n## Done\n'
+run later 1; check "later without a Later heading fails" "t: no '## Later' heading in $TODO_FILE" "$out"
+check "item not lost when Later is missing" $'## Today\n- [ ] A\n\n## Done' "$(file)"
+
+# --- list --today / --later ---
+fresh "## Today
+- [ ] A
+- [ ] B
+
+## Later
+- [ ] C
+
+## Done
+- [x] $today D
+"
+run list --today; check "list --today: only Today's items" "  1  Today  A
+  2  Today  B" "$out"
+run list --later; check "list --later: keeps the full-list number" "  3  Later  C" "$out"
+full_list=$("$T_BIN" list)
+run ls --later --today; check "--today --later together list everything" "$full_list" "$out"
+run list --today --done; check "--today with --done fails" 1 "$rc"
+run list --later --all;  check "--later with --all fails" 1 "$rc"
+run today 3; run list --later; check "list --later when Later is empty" "" "$out"
+
+# --- listing done items ---
+fresh "## Today
+- [ ] Open one
+- [x] Ticked in an editor
+
+## Done
+- [x] $today Alpha
+- [x] $d7 Bravo
+"
+printf '# Archive %s\n\n- [x] %s Charlie\n' "$y" "$d8" >"$dir/Archive $y.md"
+printf '# Archive 2020\n\n- [x] 2020-05-01 Ancient\n- [x] 2020-06-01 Later ancient\n' >"$dir/Archive 2020.md"
+printf -- '- [x] 2099-01-01 Not an archive\n' >"$dir/Archive notes.md"
+run list --done
+check "list --done: Done section, newest first, editor ticks included" "$today  Ticked in an editor
+$today  Alpha
+$d7  Bravo" "$out"
+run list --done --all
+check "list --done --all: includes year archives only" "$today  Ticked in an editor
+$today  Alpha
+$d7  Bravo
+$d8  Charlie
+2020-06-01  Later ancient
+2020-05-01  Ancient" "$out"
+expected=$out; run ls --all --done; check "option order and alias" "$expected" "$out"
+run list --all;   check "--all without --done fails" 1 "$rc"
+run list --bogus; check "unknown list option fails" 1 "$rc"
+fresh "$EMPTY"; run list --done; check "list --done with nothing done" "" "$out"
+
+# --- Jira links ---
+L() { print -r -- "[$1](https://jira.example.com/browse/$1)"; }
+fresh "$EMPTY"
+run add "Retest PROJ-1877 and OPS-12."
+check "add links Jira keys" "Added 1 (Today): Retest $(L PROJ-1877) and $(L OPS-12)." "$out"
+plain='Leave UTF-8, ISO-8601, ABC-12, xPROJ-4, PROJ-5a, `PROJ-3`, https://example.com/PROJ-2 and [see PROJ-6](https://example.com) alone'
+run add "$plain"
+check "non-keys, unknown projects, code, URLs and existing links untouched" "Added 2 (Today): $plain" "$out"
+fresh "## Today
+- [ ] Typed in an editor PROJ-10
+Notes about PROJ-11
+
+## Done
+- [x] $today Shipped WEB-7
+"
+run
+check "list prints raw Markdown when not a terminal" "  1  Today  Typed in an editor $(L PROJ-10)" "$out"
+check "keys typed in an editor are linked; non-item lines untouched" "## Today
+- [ ] Typed in an editor $(L PROJ-10)
+Notes about PROJ-11
+
+## Done
+- [x] $today Shipped $(L WEB-7)" "$(file)"
+before=$(file); run; check "linking is idempotent" "$before" "$(file)"
+on_tty() { python3 -I -c 'import pty,sys; pty.spawn(sys.argv[1:])' "$T_BIN" "$@" </dev/null | tr -d '\r'; }  # run t with a pseudo-terminal as stdout
+osc() { print -rn -- $'\e]8;;'"https://jira.example.com/browse/$1"$'\e\\'"$1"$'\e]8;;\e\\'; }
+out=$(on_tty list)
+check "list on a terminal shows clickable keys" "  1  Today  Typed in an editor $(osc PROJ-10)" "$out"
+out=$(on_tty list --done)
+check "list --done on a terminal shows clickable keys" "$today  Shipped $(osc WEB-7)" "$out"
+
+# linking off: empty, blank or unset TODO_JIRA_KEYS, silently
+off='Fix offset -42 for PROJ-1 and OPS-2'
+for setting in "TODO_JIRA_KEYS=" "TODO_JIRA_KEYS= " "-u TODO_JIRA_KEYS"; do
+  fresh "$EMPTY"
+  out=$(env ${=setting} "$T_BIN" add "$off" 2>&1)
+  check "no linking with env $setting" "Added 1 (Today): $off" "$out"
+done
+fresh "## Today
+- [ ] Linked $(L PROJ-1) and bare PROJ-2
+
+## Done
+"
+before=$(file); out=$(TODO_JIRA_KEYS= "$T_BIN" 2>&1)
+check "tidy with linking off leaves bare keys and links alone" "$before" "$(file)"
+
+# wrong Jira settings: warn, turn linking off, never write broken links
+jira_bad() { # <name> <expected warning> <env assignments...>
+  local name=$1 warning=$2; shift 2
+  fresh "$EMPTY"
+  out=$(env "$@" "$T_BIN" add "$off" 2>&1)
+  check "$name" "t: $warning
+Added 1 (Today): $off" "$out"
+}
+jira_bad "URL without trailing slash" \
+  "TODO_JIRA_URL must start with http:// or https:// and end with / (got 'https://x.example/browse'); Jira linking is off" \
+  TODO_JIRA_URL=https://x.example/browse
+jira_bad "URL without scheme" \
+  "TODO_JIRA_URL must start with http:// or https:// and end with / (got 'x.example/browse/'); Jira linking is off" \
+  TODO_JIRA_URL=x.example/browse/
+jira_bad "keys set but no URL" "TODO_JIRA_KEYS is set but TODO_JIRA_URL isn't; Jira linking is off" TODO_JIRA_URL=
+jira_bad "comma-separated keys" \
+  "TODO_JIRA_KEYS: 'PROJ,OPS' isn't a Jira project key (use uppercase keys separated by spaces); Jira linking is off" \
+  "TODO_JIRA_KEYS=PROJ,OPS WEB"
+jira_bad "lowercase and regex keys" \
+  "TODO_JIRA_KEYS: 'proj', 'A.B' isn't a Jira project key (use uppercase keys separated by spaces); Jira linking is off" \
+  "TODO_JIRA_KEYS=proj A.B"
+fresh "$EMPTY"
+out=$(TODO_JIRA_KEYS="  PROJ   P2_X  " "$T_BIN" add "PROJ-1 P2_X-2 PROJX-3" 2>&1)
+check "keys with digits/underscores, extra spaces" "Added 1 (Today): $(L PROJ-1) $(L P2_X-2) PROJX-3" "$out"
+
+# perl failing while linking is on: stop with an error, never touch the list
+noperl=$(mktemp -d); dirs+=$noperl
+printf '#!/bin/sh\nexit 127\n' >"$noperl/perl"; chmod +x "$noperl/perl"
+fresh "## Today
+- [ ] keep me PROJ-1
+
+## Done
+"
+before=$(file)
+out=$(PATH="$noperl:$PATH" "$T_BIN" list 2>&1); rc=$?
+check "perl failure: list fails" "1|t: Jira linking failed (is perl installed?); list not changed" "$rc|$out"
+out=$(PATH="$noperl:$PATH" "$T_BIN" add new 2>&1); rc=$?
+check "perl failure: add fails" 1 "$rc"
+check "perl failure: list file untouched" "$before" "$(file)"
+out=$(PATH="$noperl:$PATH" TODO_JIRA_KEYS= "$T_BIN" add new 2>&1)
+check "perl not needed with linking off" "Added 2 (Today): new" "$out"
+
+# --- t commands (used by Tab completion) ---
+export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
+run commands
+check "commands exits 0 without a list" 0 "$rc"
+check "commands: one tab-separated line per command" 13 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+[[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
+check "commands: add line has insert text, description and example" 0 $?
+# every runnable insert (no placeholder) must be accepted by t
+cmds=$out
+fresh "$EMPTY"
+for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$')"}; do
+  run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
+done
+
+# --- Tab completion widget (shell/t.zsh), driven through a pseudo-terminal ---
+zmodload zsh/zpty zsh/zselect
+widget_dump=$(mktemp); dirs+=$widget_dump
+zpty -b TT "PATH='${T_BIN:h}':\$PATH PS1='READY> ' zsh -f -i"
+ready() { # wait (max ~5s, never blocks) until the shell shows its prompt again
+  local buf= chunk i
+  for i in {1..50}; do
+    while zpty -r -t TT chunk 2>/dev/null; do buf+=$chunk; done
+    [[ $buf == *'READY> '* ]] && return 0
+    zselect -t 10
+  done
+  print -r -- "harness: no prompt; got ${(q+)buf}"; return 1
+}
+setup() { zpty -w TT "$1"; ready; }
+ready
+setup "bindkey -e; _mark() { LBUFFER+=X }; zle -N _mark; bindkey '^I' _mark"
+setup "fzf() { local a q; for a; do [[ \$a == --query=* ]] && q=\${a#--query=}; done; grep -m1 \"^\$q\" }"
+setup "_dump() { print -r -- \"\$BUFFER|\$CURSOR\" >'$widget_dump'; BUFFER=; }; zle -N _dump; bindkey '^X^D' _dump"
+setup "source '${T_BIN:h:h}/shell/t.zsh'"
+tab() { # <typed text>: type it, press Tab, dump the line; sets $got to "BUFFER|CURSOR"
+  : >"$widget_dump"; zpty -w -n TT "$1"$'\t\C-x\C-d'
+  local i chunk; for i in {1..50}; do
+    while zpty -r -t TT chunk 2>/dev/null; do :; done   # keep draining the terminal or zle stalls
+    [[ -s $widget_dump ]] && break; zselect -t 10
+  done
+  got=$(<"$widget_dump")
+}
+tab 't ';        check "Tab after 't ' picks a command"              't list|6'      "$got"
+tab 't ad';      check "Tab after 't ad': cursor inside the quotes"   't add ""|7'    "$got"
+tab 't do';      check "Tab after 't do' inserts 'done '"             't done |7'     "$got"
+tab 't to';      check "Tab after 't to' inserts 'today '"            't today |8'    "$got"
+tab 't la';      check "Tab after 't la' inserts 'later '"            't later |8'    "$got"
+tab 'echo hi';   check "Tab elsewhere falls back to the old binding"  'echo hiX|8'    "$got"
+tab 't add foo'; check "Tab after a full t command falls back"        't add fooX|10' "$got"
+tab 't';         check "Tab on bare 't' falls back"                   'tX|2'          "$got"
+zpty -d TT
+
+# --- configuration from ~/.zshenv, in the form README.md recommends ---
+zdot=$(mktemp -d); dirs+=$zdot
+fresh "$EMPTY"; other=$TODO_FILE
+print -r -- 'export TODO_FILE="${TODO_FILE:-'"$other"'}"' >"$zdot/.zshenv"
+fresh "$EMPTY"
+out=$(ZDOTDIR=$zdot "$T_BIN" add mine 2>&1)
+check "a TODO_FILE given by the caller wins over ~/.zshenv" "Added 1 (Today): mine" "$out"
+check "~/.zshenv's TODO_FILE untouched" "$EMPTY" "$(<"$other")"$'\n'
+out=$(unset TODO_FILE; ZDOTDIR=$zdot "$T_BIN" add theirs 2>&1)
+check "~/.zshenv fills in TODO_FILE when unset" "Added 1 (Today): theirs" "$out"
+
+# --- edit ---
+fresh "$EMPTY"
+out=$(EDITOR="echo opened" "$T_BIN" edit 2>&1)
+check "EDITOR with arguments" "opened $TODO_FILE" "$out"
+
+# --- edge cases ---
+fresh $'## Today\n- [x] orphan\n'
+run
+check "ticked item with no Done heading: warns" "t: ticked items found but no '## Done' heading after them; list not tidied" "$out"
+check "ticked item with no Done heading: file untouched" $'## Today\n- [x] orphan' "$(file)"
+
+fresh $'## Today\n\n## Done\n\n## Later'
+run add -l x; check "add to last section without trailing newline" "Added 1 (Later): x" "$out"
+check "last section file" $'## Today\n\n## Done\n\n## Later\n- [ ] x' "$(file)"
+
+fresh $'## Later\n\n## Done\n'
+run add x; check "add without a Today heading fails" 1 "$rc"
+
+export TODO_FILE="/nonexistent/Todo.md"
+run; check "missing file fails" 1 "$rc"
+
+print "$pass passed, $fail failed"
+(( fail == 0 ))
