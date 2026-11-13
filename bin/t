@@ -376,6 +376,38 @@ lock() {
   (( rc == 0 )) || die "could not lock $lockfile"
 }
 
+# pick: choose an open item with fzf and mark it done. fzf can stay open for as long as you like,
+# so the lock is released while it is, and other runs (an agent's t add) aren't kept waiting. Then
+# it locks and tidies again and finds the chosen item by its stored text, since numbers may have
+# shifted meanwhile. If several open items have that text, the one at the chosen number wins; if
+# it's no longer clear which one was meant, or the item is gone, nothing is changed.
+pick() {
+  local shown snap choice rc n text found
+  (( $+commands[fzf] )) || die "t pick needs fzf (https://github.com/junegunn/fzf)"
+  shown=$(list) || die "could not read $f"
+  [[ -n $shown ]] || die "no open items to pick"
+  snap=$(<"$f") || die "could not read $f"
+  zsystem flock -u $lockfd || die "could not unlock $lockfile"
+  choice=$(print -r -- "$shown" | fzf --prompt='done> '); rc=$?
+  (( rc == 0 )) || exit $rc
+  n=${${=choice}[1]}
+  [[ $n == <-> ]] || die "could not read the item number from fzf's output: $choice"
+  text=$(print -r -- "$snap" | awk -v N="$n" '/^- \[ \] / && ++c == N { print substr($0, 7) }')
+  [[ -n $text ]] || die "could not find item $n in the list as fzf showed it"
+  lock
+  tidy
+  # Prints the number to finish, or "0 <count>" when there's none or more than one candidate.
+  found=$(T_TEXT="$text" awk -v N="$n" '
+    /^- \[ \] / { c++; if (substr($0, 7) == ENVIRON["T_TEXT"]) { m++; at = c; if (c == N) same = 1 } }
+    END { if (same) print N; else if (m == 1) print at; else print 0, m + 0 }' "$f") ||
+    die "could not read $f"
+  case $found in
+    "0 0") die "'$text' is no longer an open item; it was changed while fzf was open, so nothing is done" ;;
+    0\ *)  die "'$text' now matches ${found#0 } open items; run t pick again" ;;
+  esac
+  finish "$found"
+}
+
 # undo: put back the list as it was before t's last write. The current list becomes the backup,
 # so a second undo redoes. Refuses when the list was changed since that write (by hand, in an
 # editor or a sync), since restoring the backup would throw that change away.
@@ -441,9 +473,7 @@ case "$1" in
   reword)
     [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
     n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
-  pick|f)
-    pick=$(list | fzf --prompt='done> ') || exit
-    finish "$(awk '{print $1}' <<<"$pick")" ;;
+  pick|f) pick ;;
   edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

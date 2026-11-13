@@ -156,7 +156,8 @@ Archives (`Archive 2026.md`, …) are written to the same directory as the list.
 While a command runs, `t` holds a lock on a hidden, empty `.Todo.md.lock` file next to the list
 (named after your list file). Runs that start meanwhile, from you or an AI agent, wait for it, up to
 10 seconds, so no change is lost. The system releases the lock when `t` ends, even if it's killed,
-so it can't get stuck.
+so it can't get stuck. `t pick` doesn't hold it while fzf is open, so it never keeps others waiting;
+if the item you pick was changed meanwhile, it does nothing and says so.
 
 Before every change, `t` copies the list to a hidden `.Todo.md.bak` next to it, so a crash while
 writing can't lose it. `t undo` puts that copy back, undoing the last change `t` made; running it

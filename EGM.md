@@ -26,7 +26,8 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
 - **No silent failures.** When a step fails, the list is left unchanged and `t` either stops
   (`die`) or warns and skips that step (`warn`).
 - **One run at a time.** Each run that reads the list holds a lock next to it until it exits, so
-  concurrent runs from people and agents can't drop each other's changes.
+  concurrent runs from people and agents can't drop each other's changes. `t pick` releases it
+  while fzf is open and locks again before changing anything.
 - **Never lose an item.** Archives are appended before the list is rewritten, so a failure in
   between can duplicate an archived item but not drop one.
 - **Configuration only through environment variables.** `TODO_FILE`, `TODO_JIRA_KEYS` and
