@@ -17,9 +17,9 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t list --today`, `t list --later`   |                  | `[t:list]` with a section name  |
 | `t list --done [--all]`              |                  | `[t:list_done]`                 |
 | `t add [--later] <text>`             | `a`, `-l`        | `[t:add]`, `[t:insert_item]`    |
-| `t done <n>`                         | `d`              | `[t:finish]`                    |
-| `t today <n>`                        | `promote`        | `[t:move]`                      |
-| `t later <n>`                        | `demote`         | `[t:move]`                      |
+| `t done <item>`                      | `d`              | `[t:item]`, `[t:finish]`        |
+| `t today <item>`                     | `promote`        | `[t:item]`, `[t:move]`          |
+| `t later <item>`                     | `demote`         | `[t:item]`, `[t:move]`          |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
@@ -42,6 +42,7 @@ Internal helpers:
 - `[t:save]`: rewrites the list from a temp file.
 - `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
 - `[t:lock]`: takes the list's lock on `$lockfile`.
+- `[t:item]`: resolves an `<item>` argument (number or text) to an item number.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -101,6 +102,11 @@ Output contracts:
   is not changed.
 - **Archive cutoff.** A Done item is archived when its date (characters 7-16 of the line) sorts
   below `days_ago 7`. If that date can't be computed, nothing is archived.
+- **Item references.** `[t:item]` turns `<item>` into a number. Only digits: used as the number
+  as is. Anything else: the arguments joined with spaces, matched case-insensitively and literally
+  (awk `index`, not a regex) against each open item's stored text, so Markdown link URLs count
+  too. Exactly one match is required; with none or several, it dies, listing the matches, and the
+  list is unchanged. It runs under the lock, so the number can't change before it's used.
 - **Item numbers.** `n` counts `- [ ] ` lines from the top of the file, across all sections.
   `[t:list]`, `[t:finish]` and `[t:move]` all count the same way; a section filter in `list` keeps
   the numbers.

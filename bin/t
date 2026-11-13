@@ -25,15 +25,18 @@ Usage:
   t list --today | --later  list only Today's or Later's open items (same numbers as t list)
   t list --done [--all]     list done items, newest first; --all includes the archives
   t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
-  t done <n>                mark item n done                   (alias: d)
-  t today <n>               move item n from Later to Today    (alias: promote)
-  t later <n>               move item n from Today to Later    (alias: demote)
+  t done <item>             mark an item done                  (alias: d)
+  t today <item>            move an item from Later to Today   (alias: promote)
+  t later <item>            move an item from Today to Later   (alias: demote)
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
   t init                    create the list with its three headings (never overwrites)
   t help                    show this help                     (-h, --help)
   t commands                list commands with examples, tab-separated (used by Tab completion)
+
+<item> is a number from t list, or text that matches exactly one open item
+(case-insensitive, any part of it), e.g. t done "logout fix".
 
 Commands that read the list first tidy it: items ticked in an editor get
 today's date and move to Done; Done items older than 7 days move to
@@ -120,9 +123,9 @@ commands() {
     'list --done --all' 'list --done --all'    'List all done items, incl. archives'      'list --done --all' \
     'add ""'            'add "<text>"'         'Add an item to Today'                     'add "Retest logout fix PROJ-123"' \
     'add --later ""'    'add --later "<text>"' 'Add an item to Later'                     'add --later "Clean up old branches"' \
-    'done '             'done <n>'             'Mark item n done (n from t list)'         'done 2' \
-    'today '            'today <n>'            'Move item n from Later to Today'          'today 3' \
-    'later '            'later <n>'            'Move item n from Today to Later'          'later 1' \
+    'done '             'done <item>'          'Mark an item done (number or text)'       'done "logout fix"' \
+    'today '            'today <item>'         'Move an item from Later to Today'         'today 3' \
+    'later '            'later <item>'         'Move an item from Today to Later'         'later 1' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
@@ -228,9 +231,30 @@ add() {
   fi
 }
 
+# item <command> <ref...>: print the number of the open item that ref names, for t <command>. ref is
+# a number from t list, or text matching exactly one open item: a case-insensitive substring of the
+# item as stored, so a linked Jira key matches too. Text is matched literally, not as a pattern.
+# Dies when nothing or more than one item matches, listing the matches. Called as
+# n=$(item ...) || exit, so die only ends the subshell; the lock is held all along, so the number
+# can't change before it's used.
+item() {
+  local cmd=$1 ref matches; shift; ref="$*"
+  [[ -n $ref ]] || die "usage: t $cmd <item>"
+  if [[ $ref == <-> ]]; then print -r -- "$ref"; return 0; fi
+  matches=$(T_REF="$ref" awk '
+    BEGIN { r = tolower(ENVIRON["T_REF"]) }
+    /^## / { sec = substr($0, 4) }
+    /^- \[ \] / { n++; if (index(tolower(substr($0, 7)), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
+  ' "$f") || die "could not read $f"
+  [[ -n $matches ]] || die "no open item matches '$ref'"
+  [[ $matches != *$'\n'* ]] ||
+    die "'$ref' matches ${#${(f)matches}} open items; use more of the text, or the number:"$'\n'"$matches"
+  print -r -- ${${=matches}[1]}
+}
+
 finish() {
   local n=$1 tmp out
-  [[ $n == <-> ]] || die "usage: t done <n>"
+  [[ $n == <-> ]] || die "usage: t done <item>"
   tmp=$(mktemp); out=$(mktemp)
   if awk -v N="$n" -v D="$(date +%F)" -v out="$out" '
       NR==FNR { if (/^- \[ \] / && ++c==N) item=substr($0,7); next }
@@ -249,7 +273,7 @@ finish() {
 # move <section> <command> <n>: move open item n to the end of <section> (Today or Later), in one write.
 move() {
   local to=$1 cmd=$2 n=$3 found sec item tmp out
-  [[ $n == <-> ]] || die "usage: t $cmd <n>"
+  [[ $n == <-> ]] || die "usage: t $cmd <item>"
   found=$(awk -v N="$n" '/^## /{sec=substr($0,4)} /^- \[ \] / && ++c==N {print sec "\t" substr($0,7); exit}' "$f")
   [[ -n $found ]] || die "no open item $n"
   sec=${found%%$'\t'*}; item=${found#*$'\t'}
@@ -341,9 +365,9 @@ case "$1" in
   add|a)
     shift
     if [[ $1 == (--later|-l) ]]; then shift; add Later "$*"; else add Today "$*"; fi ;;
-  done|d) finish "$2" ;;
-  today|promote) move Today today "$2" ;;
-  later|demote)  move Later later "$2" ;;
+  done|d)       n=$(item done "${@:2}") || exit; finish "$n" ;;
+  today|promote) n=$(item today "${@:2}") || exit; move Today today "$n" ;;
+  later|demote)  n=$(item later "${@:2}") || exit; move Later later "$n" ;;
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;

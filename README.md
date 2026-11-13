@@ -12,9 +12,9 @@ t [list]                  list open items, numbered          (aliases: ls, l)
 t list --today | --later  list only Today's or Later's open items (same numbers as t list)
 t list --done [--all]     list done items, newest first; --all includes the archives
 t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
-t done <n>                mark item n done                   (alias: d)
-t today <n>               move item n from Later to Today    (alias: promote)
-t later <n>               move item n from Today to Later    (alias: demote)
+t done <item>             mark an item done                  (alias: d)
+t today <item>            move an item from Later to Today   (alias: promote)
+t later <item>            move an item from Today to Later   (alias: demote)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
@@ -22,6 +22,10 @@ t init                    create the list with its three headings (never overwri
 t help                    show this help                     (-h, --help)
 t commands                list commands with examples, tab-separated (used by Tab completion)
 ```
+
+`<item>` is either a number from `t list` or text that matches exactly one open item: any part of
+it, ignoring case, such as `t done "logout fix"` or `t done PROJ-123`. If the text matches several
+items, `t` lists them and changes nothing. A reference made only of digits is always a number.
 
 Commands that read the list first tidy it: items ticked in an editor get today's date and move to
 `## Done`, and Done items older than 7 days move to `Archive <year>.md` next to the list.
@@ -153,7 +157,9 @@ Add something like this to your agent's instructions (e.g. `~/.claude/CLAUDE.md`
 # Personal todo list
 My todo list is managed with the `t` command. Run `t help` for all commands.
 - Add an item: `t add "<text>"` (Today) or `t add --later "<text>"` (Later). One line.
-- List open items: `t list`. Mark one done: `t done <n>`, with `n` taken from a fresh `t list`.
+- List open items: `t list`. Mark one done by a unique part of its text: `t done "<text>"`. If
+  that matches several items, `t` lists them; use more of the text. Numbers from `t list` also
+  work, but only until the list changes.
 - Never edit the todo file or its archives directly; `t` keeps the format and archives done items.
 - Only touch the list when I ask.
 ```

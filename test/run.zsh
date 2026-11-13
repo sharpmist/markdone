@@ -172,7 +172,7 @@ check "file after moving both" "## Today
 before=$(file)
 run later 1;  check "item already in Later fails" "t: item 1 is already in Later" "$out"
 run later 9;  check "later with no such item fails" 1 "$rc"
-run later;    check "later without a number fails" "t: usage: t later <n>" "$out"
+run later;    check "later without an item fails" "t: usage: t later <item>" "$out"
 check "file unchanged after failed moves" "$before" "$(file)"
 fresh $'## Today\n- [ ] A\n\n## Done\n'
 run later 1; check "later without a Later heading fails" "t: no '## Later' heading in $TODO_FILE" "$out"
@@ -197,6 +197,37 @@ run ls --later --today; check "--today --later together list everything" "$full_
 run list --today --done; check "--today with --done fails" 1 "$rc"
 run list --later --all;  check "--later with --all fails" 1 "$rc"
 run today 3; run list --later; check "list --later when Later is empty" "" "$out"
+
+# --- items by text ---
+p7="[PROJ-7](https://jira.example.com/browse/PROJ-7)"
+fresh "## Today
+- [ ] Fix login bug
+- [ ] Write docs (v2.1)
+
+## Later
+- [ ] Fix logout PROJ-7
+
+## Done
+"
+run done write;          check "done by text" "Done: Write docs (v2.1)" "$out"
+run undo
+run done LOGIN BUG;      check "text: case-insensitive, words joined" "Done: Fix login bug" "$out"
+run undo
+run d "(v2";             check "text: matched literally, not as a pattern" "Done: Write docs (v2.1)" "$out"
+run undo
+run later docs;          check "later by text" "Moved to Later as 3: Write docs (v2.1)" "$out"
+run today logout;        check "today by text" "Moved to Today as 2: Fix logout $p7" "$out"
+run done PROJ-7;         check "a linked Jira key matches" "Done: Fix logout $p7" "$out"
+run undo; run undo; run undo   # undo, redo, undo: back to before "done PROJ-7"
+before=$(file)
+run done fix
+check "ambiguous text fails, listing the matches" "1|t: 'fix' matches 2 open items; use more of the text, or the number:
+  1  Today  Fix login bug
+  2  Today  Fix logout $p7" "$rc|$out"
+run done "f.x";          check "no match fails" "1|t: no open item matches 'f.x'" "$rc|$out"
+run done;                check "done without an item fails" "1|t: usage: t done <item>" "$rc|$out"
+run today login;         check "today: text naming a Today item" "1|t: item 1 is already in Today" "$rc|$out"
+check "file unchanged after failed references" "$before" "$(file)"
 
 # --- listing done items ---
 fresh "## Today
