@@ -17,6 +17,9 @@ This overrides any default instruction to add them.
 - `bin/t`: the whole command (zsh, with awk and perl for the text processing)
 - `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands`
 - `test/run.zsh`: the test suite
+- `EGM.md`, `bin/EGM.md`, `shell/EGM.md`: contracts listing each directory's interface, invariants
+  and side effects. Read them before changing the code, and keep them true: when behaviour they
+  describe changes, update them in the same commit.
 
 ## Never touch a real todo list
 
@@ -66,6 +69,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   - the `case` dispatch at the bottom of `bin/t`, or the first `case` block above it for commands
     that must work without a list (like `help` and `commands`)
   - the Commands section of `README.md`
+  - `bin/EGM.md` (command table, invariants, side effects), and `shell/EGM.md` or the root
+    `EGM.md` when the change reaches them
   - tests in `test/run.zsh`
 - **Writing the list:** build the result in a temp file, check that every step producing it
   succeeded, then rewrite the list with `save "$tmp"`. `save` rewrites the file in place

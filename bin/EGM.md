@@ -4,8 +4,8 @@
 
 `t` is the whole todo command: one zsh script that reads and rewrites a single Markdown list
 (`## Today`, `## Later`, `## Done`), using awk and perl for the text processing. Every command
-except `help` and `commands` first checks that the list exists, validates the Jira settings and
-tidies the list, then runs.
+except `help`, `commands` and `init` first checks that the list exists, validates the Jira
+settings and tidies the list, then runs.
 
 ## Interface
 
@@ -22,6 +22,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t later <n>`                        | `demote`         | `[t:move]`                      |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
+| `t init`                             |                  | `[t:init]`                      |
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
 | `t commands`                         |                  | `[t:commands]`                  |
 
@@ -49,15 +50,17 @@ Output contracts:
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
 - Success messages: `Added <n> (<section>): <text>`, `Done: <text>`,
-  `Moved to <section> as <n>: <text>`.
+  `Moved to <section> as <n>: <text>`, `Created <file>`.
 
 ## Invariants
 
-- **The list must exist.** `t` never creates it: every command except `help` and `commands` dies
-  when `$f` is not a file (`[t:f]` check before `check_jira`).
+- **The list must exist.** Only `t init` creates it: every command except `help`, `commands` and
+  `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
+- **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
+  already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
-  list command, including `edit`, sees a tidied list. `help` and `commands` exit before that and
-  never touch the list.
+  list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
+  that; `help` and `commands` never touch the list.
 - **Writes go through `save`.** `[t:add]`, `[t:finish]`, `[t:move]` and `[t:tidy]` build the result
   in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` writes
   with `cat "$1" >"$f"`, so the file itself (symlink, permissions) is kept. The write is not
@@ -101,6 +104,7 @@ Output contracts:
   from `[t:tidy]` on any list command when tidying changes the list.
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
+- Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.
 - Creates temp files with `mktemp` and removes them before returning.
 - Runs external programs: `awk`, `date`, `cmp`, `cut`, `sort`, `grep`, `cat`, `mktemp`; `perl`
   when Jira linking is on (`[t:linkify]`) or stdout is a terminal (`[t:render]`); `fzf` for

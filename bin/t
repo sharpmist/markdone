@@ -26,6 +26,7 @@ Usage:
   t later <n>               move item n from Today to Later    (alias: demote)
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
+  t init                    create the list with its three headings (never overwrites)
   t help                    show this help                     (-h, --help)
   t commands                list commands with examples, tab-separated (used by Tab completion)
 
@@ -110,6 +111,7 @@ commands() {
     'later '            'later <n>'            'Move item n from Today to Later'          'later 1' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
+    'init'              'init'                 'Create the list (never overwrites)'       'init' \
     'help'              'help'                 'Show help'                                'help'
   do
     printf '%s\t%-22s %-42s e.g. t %s\n' "$ins" "$shown" "$desc" "$ex"
@@ -243,13 +245,23 @@ move() {
   fi
 }
 
+# init: create the list with its three headings. Never overwrites: dies when anything is already
+# at $f, so an existing list can't be emptied by accident.
+init() {
+  [[ ! -e $f && ! -L $f ]] || die "$f already exists; not changed"
+  mkdir -p -- "${f:h}" || die "could not create the directory ${f:h}"
+  printf '## Today\n\n## Later\n\n## Done\n' >"$f" || die "could not write $f"
+  print -r -- "Created $f"
+}
+
 # Commands that don't need the list.
 case "$1" in
   -h|--help|help) usage; exit 0 ;;
   commands) commands; exit 0 ;;
+  init) init; exit 0 ;;
 esac
 
-[[ -f $f ]] || die "$f not found; create it with the headings '## Today', '## Later' and '## Done' (see README.md), or set TODO_FILE"
+[[ -f $f ]] || die "$f not found; create it with 't init', or set TODO_FILE to your list"
 check_jira
 tidy
 

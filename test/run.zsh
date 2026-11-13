@@ -318,13 +318,13 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 13 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 14 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
 cmds=$out
 fresh "$EMPTY"
-for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$')"}; do
+for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init$')"}; do
   run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
 done
 
@@ -395,7 +395,22 @@ fresh $'## Later\n\n## Done\n'
 run add x; check "add without a Today heading fails" 1 "$rc"
 
 export TODO_FILE="/nonexistent/Todo.md"
-run; check "missing file fails" 1 "$rc"
+run; check "missing file fails and points to t init" "1|t: /nonexistent/Todo.md not found; create it with 't init', or set TODO_FILE to your list" "$rc|$out"
+
+# --- t init ---
+dir=$(mktemp -d); dirs+=$dir; export TODO_FILE="$dir/new dir/sub/Todo.md"
+run init;  check "init creates the list and its directories" "0|Created $TODO_FILE" "$rc|$out"
+check "init writes the three headings" "$EMPTY" "$(file)"$'\n'
+run add first; check "list made by init is usable" "Added 1 (Today): first" "$out"
+before=$(file)
+run init;  check "init refuses an existing list" "1|t: $TODO_FILE already exists; not changed" "$rc|$out"
+check "init leaves an existing list untouched" "$before" "$(file)"
+ln -s "$dir/missing-target.md" "$dir/dangling.md"; export TODO_FILE="$dir/dangling.md"
+run init;  check "init refuses a dangling symlink" 1 "$rc"
+[[ ! -e $dir/missing-target.md ]]; check "init does not write through a dangling symlink" 0 $?
+ro=$(mktemp -d); dirs+=$ro; chmod a-w "$ro"; export TODO_FILE="$ro/sub/Todo.md"
+run init;  check "init fails when the directory can't be created" 1 "$rc"
+[[ $out == *"t: could not create the directory $ro/sub" ]]; check "init failure names the directory" 0 $?
 
 print "$pass passed, $fail failed"
 (( fail == 0 ))

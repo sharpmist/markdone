@@ -1,0 +1,47 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (BSD awk)
+            os: macos-latest
+          - name: Linux (mawk)
+            os: ubuntu-latest
+            packages: zsh mawk
+            awk: mawk
+          - name: Linux (gawk)
+            os: ubuntu-latest
+            packages: zsh gawk
+            awk: gawk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh and awk
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+          # bin/t calls plain "awk"; put the awk under test first on PATH
+          mkdir -p "$RUNNER_TEMP/awk"
+          ln -s "$(command -v ${{ matrix.awk }})" "$RUNNER_TEMP/awk/awk"
+          echo "$RUNNER_TEMP/awk" >> "$GITHUB_PATH"
+      - name: Show tool versions
+        run: |
+          zsh --version
+          command -v awk
+          perl -e 'print "perl $^V\n"'
+          python3 --version
+      - name: Run tests
+        run: test/run.zsh

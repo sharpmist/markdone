@@ -17,6 +17,7 @@ t today <n>               move item n from Later to Today    (alias: promote)
 t later <n>               move item n from Today to Later    (alias: demote)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
+t init                    create the list with its three headings (never overwrites)
 t help                    show this help                     (-h, --help)
 t commands                list commands with examples, tab-separated (used by Tab completion)
 ```
@@ -67,14 +68,16 @@ export TODO_JIRA_URL="${TODO_JIRA_URL-https://your-company.atlassian.net/browse/
 The Jira lines use `-` instead of `:-` so that `TODO_JIRA_KEYS= t …` still turns linking off for one
 run.
 
-`t` doesn't create the list. Open a new terminal (so the settings above are loaded) and create it
-once with the three section headings:
+`t` doesn't create the list on its own. Open a new terminal (so the settings above are loaded) and
+create it once:
 
 ```sh
-f="${TODO_FILE:-$HOME/todo/Todo.md}"
-mkdir -p "$(dirname "$f")"
-printf '## Today\n\n## Later\n\n## Done\n' > "$f"
+t init
 ```
+
+This writes the three section headings (`## Today`, `## Later`, `## Done`) to `$TODO_FILE`, creating
+its directory if needed. It never overwrites: if the file already exists, `t init` stops with an
+error and leaves it alone.
 
 Archives (`Archive 2026.md`, …) are written to the same directory as the list.
 
@@ -153,3 +156,7 @@ Runs `bin/t` against throwaway files, with an example Jira setup. It ignores you
 your real list and settings are never touched. Besides the requirements above, it needs `python3`
 (for the terminal-output checks) and zsh's standard `zsh/zpty` and `zsh/zselect` modules (for the
 Tab completion checks).
+
+## License
+
+[MIT](LICENSE)
