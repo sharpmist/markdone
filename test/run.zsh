@@ -318,13 +318,13 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 14 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 15 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
 cmds=$out
 fresh "$EMPTY"
-for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init$')"}; do
+for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init$' -e '^undo$')"}; do
   run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
 done
 
@@ -380,6 +380,96 @@ check "~/.zshenv fills in TODO_FILE when unset" "Added 1 (Today): theirs" "$out"
 fresh "$EMPTY"
 out=$(EDITOR="echo opened" "$T_BIN" edit 2>&1)
 check "EDITOR with arguments" "opened $TODO_FILE" "$out"
+
+# --- locking ---
+lock_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.lock"; }
+hold() { # <hundredths of a second>: hold the list's lock from another process; sets $holder
+  local ready="${TODO_FILE:h}/held"
+  zsh -fc 'zmodload zsh/system zsh/zselect
+    : >>"$1"; zsystem flock -f fd "$1" && : >"$2" && zselect -t $3' x "$(lock_of)" "$ready" $1 &
+  holder=$!
+  until [[ -e $ready ]]; do zselect -t 1; done
+  rm -f "$ready"
+}
+fresh "$EMPTY"
+for i in {1..20}; do "$T_BIN" add "parallel $i" >/dev/null 2>&1 & done; wait
+check "parallel adds: none lost" 20 "$(grep -c '^- \[ \] parallel ' "$TODO_FILE")"
+
+fresh "$EMPTY"
+hold 50
+run add waited; check "waits for a lock that is released" "0|Added 1 (Today): waited" "$rc|$out"
+wait $holder
+hold 1500
+before=$(file); run add blocked
+check "gives up on a lock that is held" \
+  "1|t: another t has been using the list for 10 seconds; try again when it's done" "$rc|$out"
+check "held lock: list untouched" "$before" "$(file)"
+kill -9 $holder; wait $holder 2>/dev/null
+run add freed; check "lock of a killed process is free at once" "0|Added 2 (Today): freed" "$rc|$out"
+
+# t edit execs the editor, which closes the lock's descriptor. The editor checks from a child
+# process: the editor process itself (t after exec) could always relock a lock it still held.
+fresh "$EMPTY"
+cat >"$dir/editor" <<'EOS'
+#!/bin/sh
+zsh -fc 'zmodload zsh/system; zsystem flock -t 0 -f fd "$1" 2>/dev/null && echo free || echo held' x \
+  "$(dirname "$1")/.$(basename "$1").lock"
+EOS
+chmod +x "$dir/editor"
+out=$(EDITOR="$dir/editor" "$T_BIN" edit 2>&1)
+check "the editor started by t edit doesn't hold the lock" free "$out"
+
+fresh "$EMPTY"; chmod a-w "${TODO_FILE:h}"
+run; check "unwritable directory: can't lock" "1|t: could not create the lock file $(lock_of)" "$rc|$out"
+chmod u+w "${TODO_FILE:h}"
+run help; [[ ! -e $(lock_of) ]]; check "help doesn't lock" 0 $?
+
+# --- backup ---
+bak_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.bak"; }
+fresh "$EMPTY"
+run list; [[ ! -e $(bak_of) ]]; check "no backup when nothing is written" 0 $?
+run add one; check "backup holds the list before the write" "$EMPTY" "$(cat "$(bak_of)")"$'\n'
+before=$(file); run add two
+check "backup follows each write" "$before" "$(cat "$(bak_of)")"
+[[ $(ls -l "$(bak_of)") == -rw-------* ]]; check "backup is private to the owner" 0 $?
+before=$(file); chmod a-w "$(bak_of)"; run add three
+check "backup fails: nothing written" "1|t: could not write the backup $(bak_of); list not changed" \
+  "$rc|${out##*$'\n'}"
+check "backup fails: list untouched" "$before" "$(file)"
+chmod u+w "$(bak_of)"
+
+# --- undo ---
+fresh "$EMPTY"
+run undo; check "undo with nothing to undo" "1|t: nothing to undo" "$rc|$out"
+run add one; after_add=$(file)
+run undo; check "undo" "0|Undid the last change; run t undo again to redo it" "$rc|$out"
+check "undo restores the list" "$EMPTY" "$(file)"$'\n'
+run undo; check "second undo redoes" "$after_add" "$(file)"
+run done 1; run undo
+check "undo a done item" "$after_add" "$(file)"
+run later 1; run today 1; run undo
+check "undo only reverts the last change" $'## Today\n\n## Later\n- [ ] one\n\n## Done' "$(file)"
+
+# the list changed since t's last write: undo would throw that change away
+fresh "$EMPTY"
+run add one; print -r -- "- [ ] typed by hand" >>"$TODO_FILE"; touch -t 202001010000 "$TODO_FILE"
+before=$(file); run undo
+check "undo refuses after a hand edit" \
+  "1|t: the list was changed since t last wrote it; not undoing (t's previous version is in $(bak_of))" "$rc|$out"
+check "refused undo leaves the list alone" "$before" "$(file)"
+
+# undo must not tidy first: that would be a change of its own
+fresh "$EMPTY"
+run add one; run add two
+print -r -- "- [x] ticked by hand" >>"$TODO_FILE"; touch -r "$TODO_FILE" "$(bak_of)"
+run undo; check "undo doesn't tidy first" $'## Today\n- [ ] one\n\n## Later\n\n## Done' "$(file)"
+
+# undoing a tidy that archived would archive the same items twice
+fresh "$EMPTY"
+run add new; print -r -- "- [x] $d8 old" >>"$TODO_FILE"
+run list   # tidy archives "old": the last write
+check "tidy that archived: undo refuses" "1|t: nothing to undo" "$(run undo; print -r -- "$rc|$out")"
+check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive ${d8[1,4]}.md")"
 
 # --- edge cases ---
 fresh $'## Today\n- [x] orphan\n'

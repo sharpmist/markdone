@@ -22,6 +22,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t later <n>`                        | `demote`         | `[t:move]`                      |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
+| `t undo`                             |                  | `[t:undo]`                      |
 | `t init`                             |                  | `[t:init]`                      |
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
 | `t commands`                         |                  | `[t:commands]`                  |
@@ -39,6 +40,8 @@ Internal helpers:
 - `[t:linkify]`: turns bare Jira keys into Markdown links; `linkify all` processes every line.
 - `[t:render]`: shows Markdown links as OSC 8 hyperlinks when stdout is a terminal.
 - `[t:save]`: rewrites the list from a temp file.
+- `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
+- `[t:lock]`: takes the list's lock on `$lockfile`.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -50,7 +53,8 @@ Output contracts:
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
 - Success messages: `Added <n> (<section>): <text>`, `Done: <text>`,
-  `Moved to <section> as <n>: <text>`, `Created <file>`.
+  `Moved to <section> as <n>: <text>`, `Created <file>`,
+  `Undid the last change; run t undo again to redo it`.
 
 ## Invariants
 
@@ -58,14 +62,31 @@ Output contracts:
   `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
 - **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
   already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
+- **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
+  and `tidy`, and holds the lock until it exits, so reading, tidying and writing are one step.
+  `[t:lock]` takes an fcntl lock (`zsystem flock`) on `$lockfile`, an empty `.<list name>.lock`
+  next to the list, creating the file if needed. It checks every 0.05 s for up to 10 s, then dies.
+- **Unlocking.** The kernel releases the lock when the process ends, however it ends (`die`, a
+  signal, `kill -9`), so there are no stale locks. Child processes never hold it. `exec` closes the
+  lock's descriptor (`zsystem flock` without `-e`), so the editor `t edit` starts doesn't hold it.
+  `t pick` holds the lock while fzf is open.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
   list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
   that; `help` and `commands` never touch the list.
 - **Writes go through `save`.** `[t:add]`, `[t:finish]`, `[t:move]` and `[t:tidy]` build the result
-  in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` writes
-  with `cat "$1" >"$f"`, so the file itself (symlink, permissions) is kept. The write is not
-  atomic.
-- **Startup.** `zmodload zsh/datetime` must succeed, or `t` exits 1 before doing anything.
+  in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` first copies
+  the list to `$bak` (`.<list name>.bak` next to it, created with `umask 077`) and dies without
+  writing when that fails. It then writes with `cat "$1" >"$f"`, so the file itself (symlink,
+  permissions) is kept. The write is not atomic; after a crash during it, `$bak` holds the list as
+  it was.
+- **Undo.** `[t:save]` gives `$bak` the list's mtime after each write (`touch -r`). `[t:undo]`
+  restores `$bak` only when the mtimes still match, so a change made outside `t` since then is
+  never thrown away; it restores through `[t:save]`, so a second undo redoes. It runs under the
+  lock but before `check_jira` and `tidy`, which would otherwise make a change of their own. A
+  `[t:tidy]` that archived items deletes `$bak`, because restoring would archive them twice; undo
+  then dies with `nothing to undo`.
+- **Startup.** `zmodload zsh/datetime zsh/system` must succeed, or `t` exits 1 before doing
+  anything. `zsystem flock -i` needs zsh 5.8 or newer.
 - **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
   `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
   list everything.
@@ -102,6 +123,8 @@ Output contracts:
 
 - Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
+- Overwrites `$bak` with the current list before every write and sets its mtime to the list's
+  (`[t:save]`); deletes it after a tidy that archived (`[t:tidy]`). `t undo` restores it.
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
 - Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.
@@ -113,7 +136,9 @@ Output contracts:
 - Writes warnings and errors to stderr prefixed with `t: `; exits 1 on `[t:die]` and on an unknown
   command (after printing the usage to stderr). `t pick` exits with fzf's status when nothing is
   chosen.
-- No network access and no locking: concurrent runs are not serialised.
+- Creates `$lockfile`, an empty file next to the list, and holds an fcntl lock on it while running.
+  The file stays; only the lock is released.
+- No network access.
 
 ## Verification
 
