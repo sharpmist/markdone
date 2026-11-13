@@ -232,6 +232,25 @@ run done;                check "done without an item fails" "1|t: usage: t done 
 run today login;         check "today: text naming a Today item" "1|t: item 1 is already in Today" "$rc|$out"
 check "file unchanged after failed references" "$before" "$(file)"
 
+# Text is matched against what t list shows in a terminal: links count by their text, not their URL.
+fresh "## Today
+- [ ] Fix logout PROJ-7
+- [ ] Read [the guide](https://docs.example.com/guide) on https://example.org/faq
+- [ ] Ask about [local notes](notes.md)
+
+## Done
+"
+run done jira.example;   check "a Jira link's URL doesn't match" "1|t: no open item matches 'jira.example'" "$rc|$out"
+run done docs.example;   check "a link's URL doesn't match" "1|t: no open item matches 'docs.example'" "$rc|$out"
+run done browse;         check "no match in any link's URL" "1|t: no open item matches 'browse'" "$rc|$out"
+run done "logout proj-7"; check "text across a link boundary matches" "Done: Fix logout $p7" "$out"
+run undo
+run done "the guide on";  check "a link matches by its text" 0 "$rc"
+run undo
+run done example.org;     check "a bare URL is shown, so it matches" 0 "$rc"
+run undo
+run done notes.md;        check "a non-web link is shown as is, so it matches" 0 "$rc"
+
 # --- rm ---
 fresh "## Today
 - [ ] keep

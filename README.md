@@ -76,8 +76,10 @@ t commands                list commands with examples, tab-separated (used by Ta
 ```
 
 `<item>` is either a number from `t list` or text that matches exactly one open item: any part of
-it, ignoring case, such as `t done "logout fix"` or `t done PROJ-123`. If the text matches several
-items, `t` lists them and changes nothing. A reference made only of digits is always a number.
+it, ignoring case, such as `t done "logout fix"` or `t done PROJ-123`. Text is matched against the
+item as `t list` shows it in a terminal, so a link counts by its text and its URL never matches. If
+the text matches several items, `t` lists them and changes nothing. A reference made only of digits
+is always a number.
 
 For `t reword`, the first argument names the item and the rest is the new text, so quote an item
 given as text with spaces: `t reword "logout" "Retest logout fix"`.

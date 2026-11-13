@@ -260,7 +260,8 @@ add() {
 
 # item <command> <ref...>: print the number of the open item that ref names, for t <command>. ref is
 # a number from t list, or text matching exactly one open item: a case-insensitive substring of the
-# item as stored, so a linked Jira key matches too. Text is matched literally, not as a pattern.
+# item as a terminal shows it, with each [text](http...) link reduced to its text, so a linked Jira
+# key matches but its URL doesn't. Text is matched literally, not as a pattern.
 # Dies when nothing or more than one item matches, listing the matches. Called as
 # n=$(item ...) || exit, so die only ends the subshell; the lock is held all along, so the number
 # can't change before it's used.
@@ -270,8 +271,18 @@ item() {
   if [[ $ref == <-> ]]; then print -r -- "$ref"; return 0; fi
   matches=$(T_REF="$ref" awk '
     BEGIN { r = tolower(ENVIRON["T_REF"]) }
+    # shown: s with [text](http...) links reduced to their text, as render() shows them.
+    function shown(s,   o, l) {
+      o = ""
+      while (match(s, /\[[^]]+\]\(https?:\/\/[^) \t]+\)/)) {
+        l = substr(s, RSTART, RLENGTH)
+        o = o substr(s, 1, RSTART - 1) substr(l, 2, index(l, "](") - 2)
+        s = substr(s, RSTART + RLENGTH)
+      }
+      return o s
+    }
     /^## / { sec = substr($0, 4) }
-    /^- \[ \] / { n++; if (index(tolower(substr($0, 7)), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
+    /^- \[ \] / { n++; if (index(tolower(shown(substr($0, 7))), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
   ' "$f") || die "could not read $f"
   [[ -n $matches ]] || die "no open item matches '$ref'"
   [[ $matches != *$'\n'* ]] ||

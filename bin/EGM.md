@@ -117,9 +117,11 @@ Output contracts:
   below `days_ago 7`. If that date can't be computed, nothing is archived.
 - **Item references.** `[t:item]` turns `<item>` into a number. Only digits: used as the number
   as is. Anything else: the arguments joined with spaces, matched case-insensitively and literally
-  (awk `index`, not a regex) against each open item's stored text, so Markdown link URLs count
-  too. Exactly one match is required; with none or several, it dies, listing the matches, and the
-  list is unchanged. It runs under the lock, so the number can't change before it's used.
+  (awk `index`, not a regex) against each open item's text as `[t:render]` shows it in a
+  terminal: `[text](http...)` links count by their text, so a linked Jira key matches but no URL
+  inside a link does. Exactly one match is required; with none or several, it dies, listing the
+  matches, and the list is unchanged. It runs under the lock, so the number can't change before
+  it's used.
 - **Item numbers.** `n` counts `- [ ] ` lines from the top of the file, across all sections.
   `[t:list]`, `[t:finish]` and `[t:move]` all count the same way; a section filter in `list` keeps
   the numbers.
