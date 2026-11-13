@@ -15,6 +15,7 @@ t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --l
 t done <item>             mark an item done                  (alias: d)
 t today <item>            move an item from Later to Today   (alias: promote)
 t later <item>            move an item from Today to Later   (alias: demote)
+t rm <item>               remove an open item                (alias: remove)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
@@ -157,6 +158,7 @@ Add something like this to your agent's instructions (e.g. `~/.claude/CLAUDE.md`
 # Personal todo list
 My todo list is managed with the `t` command. Run `t help` for all commands.
 - Add an item: `t add "<text>"` (Today) or `t add --later "<text>"` (Later). One line.
+- Remove an item: `t rm "<text>"`. Undo the last change: `t undo`.
 - List open items: `t list`. Mark one done by a unique part of its text: `t done "<text>"`. If
   that matches several items, `t` lists them; use more of the text. Numbers from `t list` also
   work, but only until the list changes.

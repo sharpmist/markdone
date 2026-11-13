@@ -229,6 +229,33 @@ run done;                check "done without an item fails" "1|t: usage: t done 
 run today login;         check "today: text naming a Today item" "1|t: item 1 is already in Today" "$rc|$out"
 check "file unchanged after failed references" "$before" "$(file)"
 
+# --- rm ---
+fresh "## Today
+- [ ] keep
+- [ ] old idea
+
+## Later
+- [ ] later idea
+
+## Done
+- [x] $today done item
+"
+run rm 2;          check "rm by number" "0|Removed: old idea" "$rc|$out"
+run remove later;  check "alias remove, by text" "0|Removed: later idea" "$rc|$out"
+check "rm leaves other lines alone" "## Today
+- [ ] keep
+
+## Later
+
+## Done
+- [x] $today done item" "$(file)"
+run undo;          check "rm can be undone" "- [ ] later idea" "$(grep later "$TODO_FILE")"
+before=$(file)
+run rm 9;          check "rm with no such item fails" "1|t: no open item 9" "$rc|$out"
+run rm "done item"; check "rm only takes open items" "1|t: no open item matches 'done item'" "$rc|$out"
+run rm;            check "rm without an item fails" "1|t: usage: t rm <item>" "$rc|$out"
+check "file unchanged after failed rm" "$before" "$(file)"
+
 # --- listing done items ---
 fresh "## Today
 - [ ] Open one
@@ -349,7 +376,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 15 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 16 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t

@@ -28,6 +28,7 @@ Usage:
   t done <item>             mark an item done                  (alias: d)
   t today <item>            move an item from Later to Today   (alias: promote)
   t later <item>            move an item from Today to Later   (alias: demote)
+  t rm <item>               remove an open item                (alias: remove)
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
@@ -126,6 +127,7 @@ commands() {
     'done '             'done <item>'          'Mark an item done (number or text)'       'done "logout fix"' \
     'today '            'today <item>'         'Move an item from Later to Today'         'today 3' \
     'later '            'later <item>'         'Move an item from Today to Later'         'later 1' \
+    'rm '               'rm <item>'            'Remove an item (t undo brings it back)'   'rm "old idea"' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
@@ -270,6 +272,23 @@ finish() {
   fi
 }
 
+# remove <n>: delete open item n.
+remove() {
+  local n=$1 tmp out
+  [[ $n == <-> ]] || die "usage: t rm <item>"
+  tmp=$(mktemp); out=$(mktemp)
+  if awk -v N="$n" -v out="$out" '
+      /^- \[ \] / && ++c==N { print substr($0,7) > out; found=1; next }
+      { print }
+      END { exit !found }' "$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Removed: $(<"$out")" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no open item $n"
+  fi
+}
+
 # move <section> <command> <n>: move open item n to the end of <section> (Today or Later), in one write.
 move() {
   local to=$1 cmd=$2 n=$3 found sec item tmp out
@@ -368,6 +387,7 @@ case "$1" in
   done|d)       n=$(item done "${@:2}") || exit; finish "$n" ;;
   today|promote) n=$(item today "${@:2}") || exit; move Today today "$n" ;;
   later|demote)  n=$(item later "${@:2}") || exit; move Later later "$n" ;;
+  rm|remove)      n=$(item rm "${@:2}") || exit; remove "$n" ;;
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;
