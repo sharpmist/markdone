@@ -15,7 +15,7 @@ This overrides any default instruction to add them.
 `t` is a zsh command for a todo list kept in one Markdown file. See `README.md` for usage and setup.
 
 - `bin/t`: the whole command (zsh, with awk and perl for the text processing)
-- `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands` and `t complete <command>`
+- `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands` and `t complete <words>`
 - `install`: links `bin/t` onto `PATH` and adds Tab completion to `~/.zshrc` (`--uninstall` undoes it)
 - `test/run.zsh`: the test suite
 - `EGM.md`, `bin/EGM.md`, `shell/EGM.md`: contracts listing each directory's interface, invariants
@@ -73,9 +73,10 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   - `commands()` in `bin/t`, which feeds Tab completion (update the count in the test
     "commands: one tab-separated line per command")
   - the `case` dispatch at the bottom of `bin/t`, or the first `case` block above it for commands
-    that must work without a list (like `help` and `commands`)
+    that must work without a list (like `help`, `commands`, `lists` and `use`)
   - `ITEM_CMDS` in `bin/t` (and `complete_items()` if it needs a section filter) when the command
-    takes an `<item>`, so Tab completion offers items after it
+    takes an `<item>`, or `complete_cmd()` when it takes something else, such as a list name, so
+    Tab completion offers it
   - the Commands section of `README.md`
   - `bin/EGM.md` (command table, invariants, side effects), and `shell/EGM.md` or the root
     `EGM.md` when the change reaches them
@@ -86,6 +87,12 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   atomic, so `save` first copies the list to a hidden backup next to it (`$bak`) and writes
   nothing if that copy fails; after a crash mid-write the backup still holds the list.
   `t undo` restores that backup; see the Undo invariant in `bin/EGM.md`.
+- **Several lists:** a run works on one list, set with `set_list` before anything reads it; the
+  list's file, lock, backup and checksum all follow from its name. Don't use `TODO_FILE` directly
+  except as the default list (`$deff`). Commands that add, delete or rename lists, or change the
+  current one, hold the folder's lock (`dir_lock`) first and a list's own lock second, never the
+  other way round. A command that locks two lists (`t move`) takes them in the order of their
+  files' paths.
 - **Locking:** every command that reads the list runs under its lock (`lock`, called before
   `tidy`) and holds it until the process ends. Don't read or write the list before that. The one
   exception is `pick`, which releases it while fzf is open and locks again before changing anything.

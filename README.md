@@ -1,10 +1,11 @@
 # markdone
 
-A personal todo list kept in one plain Markdown file, with a small command, `t`, that you and your
-AI agents can both use safely.
+A personal todo list kept in plain Markdown files, with a small command, `t`, that you and your AI
+agents can both use safely.
 
-- **One Markdown file.** `## Today`, `## Later` and `## Done` sections with checkboxes. Open it in
+- **Plain Markdown.** `## Today`, `## Later` and `## Done` sections with checkboxes. Open a list in
   Obsidian or any editor; tick an item there and `t` picks it up.
+- **One list or several.** Keep work and home apart: `t @work add …`, or `t use work` to switch.
 - **Made for AI agents too.** Agents (Claude Code, Codex, opencode, …) name items by a part of
   their text instead of numbers that shift, can read `t list --json`, and never need to edit the
   file.
@@ -66,15 +67,24 @@ t today <item>            move an item from Later to Today   (alias: promote)
 t later <item>            move an item from Today to Later   (alias: demote)
 t rm <item>               remove an open item                (alias: remove)
 t reword <item> <text>    replace an open item's text, keeping its place
+t move <item> @<list>     move an item to another list, same section (alias: mv)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
 t init [<path>]           create the list with its three headings (never overwrites)
 t init --obsidian         create the list in an Obsidian vault you pick, in its Todo folder
+
+t lists [--json]          show the lists, with open items; * marks the current one
+t lists add <name>        create another list, next to the default one
+t lists rm [--force] <name>   delete a list (with open items only with --force)
+t lists rename <old> <new>    rename a list and its archives
+t use [<list>]            switch the current list (alone: pick one with fzf)
+t @<list> <command>       run one command on another list, e.g. t @work add "Fix the build"
+
 t help                    show this help                     (-h, --help)
 t version                 show the version                   (--version)
 t commands                list commands with examples, tab-separated (used by Tab completion)
-t complete <command>      list the items <command> takes, tab-separated (used by Tab completion)
+t complete <words>        list what Tab offers after t <words>, tab-separated (used by Tab completion)
 ```
 
 `<item>` is either a number from `t list` or text that matches exactly one open item: any part of
@@ -91,15 +101,56 @@ as `t list`:
 
 ```json
 [
-{"n":1,"section":"Today","text":"Retest logout fix [PROJ-123](https://your-company.atlassian.net/browse/PROJ-123)","jira":["PROJ-123"]}
+{"list":"Todo","n":1,"section":"Today","text":"Retest logout fix [PROJ-123](https://your-company.atlassian.net/browse/PROJ-123)","jira":["PROJ-123"]}
 ]
 ```
 
-`text` is the item as stored in the file (Markdown); `jira` lists the Jira keys in it (empty when
-Jira linking is off).
+`list` is the list's name; `text` is the item as stored in the file (Markdown); `jira` lists the
+Jira keys in it (empty when Jira linking is off).
 
-Commands that read the list first tidy it: items ticked in an editor get today's date and move to
-`## Done`, and Done items older than 7 days move to `Archive <year>.md` next to the list.
+Commands that read a list first tidy it: items ticked in an editor get today's date and move to
+`## Done`, and Done items older than 7 days move to `Archive/<list> <year>.md` in the lists folder.
+
+### Several lists
+
+All your lists live in one folder: the one that holds `TODO_FILE`, your default list. Every `.md`
+file directly in it is a list, named after the file: `Todo.md` is `Todo`, `Work.md` is `Work`. In
+Obsidian that's the vault's `Todo` folder.
+
+```console
+$ t lists add Work
+Created the list Work; use it with t @Work … or t use Work
+$ t @work add "Fix the build"
+Added 1 (Today): Fix the build
+$ t use work
+Now using Work (1 open)
+$ t lists
+  Todo   3 open
+* Work   1 open
+```
+
+- **`t @<list> <command>`** runs one command on another list, without switching: `t @work done
+  build`, `t @home list`. Names match ignoring case.
+- **`t use <list>`** switches the current list, the one every command without `@<list>` uses, in
+  all your terminals (it's saved in a hidden `.current` file in the folder). `t use` alone picks one
+  with fzf; `t use Todo` (your default list) goes back.
+- **`t move <item> @<list>`** moves an item to another list, into the same section:
+  `t move build @work`, `t @work move 2 @Todo`.
+- **`TODO_LIST`** names the list for one terminal or one agent, overriding `t use`:
+  `export TODO_LIST=work`.
+
+So a command uses `@<list>` if given, else `TODO_LIST`, else the list chosen with `t use`, else
+the default list. If the current list is deleted outside `t`, it warns and uses the default list.
+
+Each list has its own undo, lock and archives (`Archive/Work 2026.md`). `t move` locks both lists
+and changes both, adding the item to the target before removing it from the source, so undoing a
+move takes `t undo` in each list (`t @work undo` and `t undo`). `t lists rm` deletes a
+list's file but keeps its archives; it refuses the default list, the current list and, without
+`--force`, a list with open items. The default list can't be renamed or deleted, since
+`TODO_FILE` names it.
+
+Archives from before there were several lists (`Archive 2026.md` next to the list) are moved to
+`Archive/<default list> 2026.md` automatically.
 
 ## Requirements
 
@@ -138,7 +189,8 @@ in an Obsidian vault (see [Keeping the list in Obsidian](#keeping-the-list-in-ob
 
 | Variable         | Purpose                                                      | Default          |
 | ---------------- | ------------------------------------------------------------ | ---------------- |
-| `TODO_FILE`      | The list file                                                | `~/todo/Todo.md` |
+| `TODO_FILE`      | The default list; its folder holds all your lists            | `~/todo/Todo.md` |
+| `TODO_LIST`      | The list to use, by name, instead of the current one         | unset            |
 | `TODO_JIRA_KEYS` | Jira project keys to link, space-separated; empty = off      | unset (no links) |
 | `TODO_JIRA_URL`  | Jira browse URL the keys are appended to; must end with `/`  | unset            |
 
@@ -196,10 +248,11 @@ vaults too, unless `TODO_FILE` is already set.
 nothing: it uses the only vault, stops with a list if there are several, and shows the `~/.zshenv`
 line instead of adding it.
 
-In the vault, the archives (`Archive 2026.md`, …) are ordinary notes next to the list. The lock,
-backup and checksum files start with a dot, so Obsidian doesn't show them.
+In the vault, the archives (`Archive/Todo 2026.md`, …) are ordinary notes in the `Todo` folder's
+`Archive` subfolder. The lock, backup and checksum files start with a dot, so Obsidian doesn't
+show them.
 
-Archives (`Archive 2026.md`, …) are written to the same directory as the list.
+Archives (`Archive/Todo 2026.md`, …) are written to an `Archive` folder next to the lists.
 
 While a command runs, `t` holds a lock on a hidden, empty `.Todo.md.lock` file next to the list
 (named after your list file). Runs that start meanwhile, from you or an AI agent, wait for it, up to
@@ -259,7 +312,12 @@ of a command first (`t ad` Tab) pre-fills the search.
 After a command that takes an item (`t done `, `t rm `, `t reword `, …), Tab picks the item in fzf
 instead and puts its number on the command line. `t today ` offers only Later's items and
 `t later ` only Today's; for `t reword` the cursor lands between quotes for the new text. Typing
-part of the item first (`t done fix` Tab) pre-fills the search. Anywhere else Tab works as before.
+part of the item first (`t done fix` Tab) pre-fills the search.
+
+With several lists, `t @` Tab picks a list, `t @work ` Tab a command and `t @work done ` Tab one of
+that list's items. `t use `, `t lists rm `, `t lists rename ` and `t move <item> ` Tab pick a
+list, and `t lists `
+Tab one of its subcommands. Anywhere else Tab works as before.
 
 `./install` turns it on. To do it by hand instead, add this to `~/.zshrc`, after fzf's own key
 bindings (adjust the path to where you cloned the repo):
@@ -269,7 +327,7 @@ source <(fzf --zsh)
 source /path/to/markdone/shell/t.zsh
 ```
 
-The commands shown come from `t commands`, and the items from `t complete <command>`, so
+The commands shown come from `t commands`, and everything else from `t complete <words>`, so
 `shell/t.zsh` doesn't need changing when commands are added.
 
 ## Using it from AI agents
@@ -286,6 +344,9 @@ My todo list is managed with the `t` command. Run `t help` for all commands.
 - Mark one done: `t done "<text>"`. Remove one: `t rm "<text>"`. Change one:
   `t reword "<text>" "<new text>"`. Undo your last change: `t undo`.
 - Never edit the todo file or its archives directly; `t` keeps the format and archives done items.
+- I may have several lists (`t lists` shows them). When I name one, use `t @<list> …`, e.g.
+  `t @work add "<text>"`; otherwise leave the current one as it is (don't run `t use`). Move an
+  item to another list with `t move "<text>" @<list>`.
 - Only touch the list when I ask.
 ```
 
