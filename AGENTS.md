@@ -76,6 +76,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   succeeded, then rewrite the list with `save "$tmp"`. `save` rewrites the file in place
   (`cat "$tmp" >"$f"`), so symlinks and permissions survive; `mv` would replace the file. It isn't
   atomic: a crash during the write can leave the list partly written.
+- **Locking:** every command that reads the list runs under its lock (`lock`, called before
+  `tidy`). Don't read or write the list before that, and call `unlock` before `exec`.
 - **Archiving:** append to the archives first, and rewrite the list only if every archive write
   worked. A crash or failed write in between can then duplicate an archived item, but never lose
   one.

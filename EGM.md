@@ -25,6 +25,8 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
   they are.
 - **No silent failures.** When a step fails, the list is left unchanged and `t` either stops
   (`die`) or warns and skips that step (`warn`).
+- **One run at a time.** Each run that reads the list holds a lock next to it until it exits, so
+  concurrent runs from people and agents can't drop each other's changes.
 - **Never lose an item.** Archives are appended before the list is rewritten, so a failure in
   between can duplicate an archived item but not drop one.
 - **Configuration only through environment variables.** `TODO_FILE`, `TODO_JIRA_KEYS` and
@@ -40,7 +42,8 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
 - The list file at `$TODO_FILE` (default `~/todo/Todo.md`) is rewritten in place.
 - `Archive <year>.md` files are created and appended to in the list's directory.
 - Sourcing `shell/t.zsh` rebinds Tab in the interactive zsh session.
-- No network access. No locking between concurrent runs.
+- A hidden lock directory, `.<list name>.lock`, exists next to the list while `t` runs.
+- No network access.
 
 ## System Verification
 

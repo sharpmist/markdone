@@ -5,9 +5,12 @@
 #   TODO_JIRA_KEYS  Jira project keys to link, space-separated, e.g. "PROJ OPS"; empty = no links
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
-zmodload zsh/datetime || exit 1
+zmodload zsh/datetime zsh/zselect || exit 1
 
 f="${TODO_FILE:-$HOME/todo/Todo.md}"
+
+# The lock is a directory next to the list (hidden, so notes apps ignore it); see lock().
+lockdir="${f:h}/.${f:t}.lock" locked=0
 
 # Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
 # text. check_jira validates both before the list is read.
@@ -254,6 +257,35 @@ init() {
   print -r -- "Created $f"
 }
 
+# lock: take the list's lock, so t runs that change the list take turns instead of one silently
+# dropping another's change. mkdir is atomic, so only one run can create $lockdir; the owner writes
+# its pid into it. Waits up to 5 seconds. A lock whose owner is no longer running (killed before it
+# could unlock) is taken over. The EXIT trap below removes the lock however t ends.
+lock() {
+  local pid tries=0
+  until mkdir -- "$lockdir" 2>/dev/null; do
+    [[ -d $lockdir ]] || die "could not create the lock $lockdir"
+    pid=$(cat -- "$lockdir/pid" 2>/dev/null)
+    if [[ $pid == <-> ]] && ! kill -0 "$pid" 2>/dev/null; then
+      rm -rf -- "$lockdir"; continue
+    fi
+    (( ++tries <= 50 )) ||
+      die "the list is locked by another t (pid ${pid:-unknown}); if no t is running, remove $lockdir"
+    zselect -t 10   # 0.1 s
+  done
+  locked=1
+  print -r -- $$ >"$lockdir/pid" || die "could not write $lockdir/pid"
+}
+
+unlock() {
+  if (( locked )); then rm -rf -- "$lockdir"; locked=0; fi
+}
+
+# Traps must be set here, at the top level: in zsh an EXIT trap set inside a function runs when
+# that function returns. Subshells don't run it, so pipelines can't drop the lock early.
+trap unlock EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+
 # Commands that don't need the list.
 case "$1" in
   -h|--help|help) usage; exit 0 ;;
@@ -262,6 +294,7 @@ case "$1" in
 esac
 
 [[ -f $f ]] || die "$f not found; create it with 't init', or set TODO_FILE to your list"
+lock
 check_jira
 tidy
 
@@ -294,6 +327,7 @@ case "$1" in
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;
-  edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
+  edit|e)   # unlock first: exec skips the EXIT trap, and an editing session mustn't block other runs
+    unlock; exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

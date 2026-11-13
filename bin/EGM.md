@@ -39,6 +39,7 @@ Internal helpers:
 - `[t:linkify]`: turns bare Jira keys into Markdown links; `linkify all` processes every line.
 - `[t:render]`: shows Markdown links as OSC 8 hyperlinks when stdout is a terminal.
 - `[t:save]`: rewrites the list from a temp file.
+- `[t:lock]`, `[t:unlock]`: take and release the list's lock, `$lockdir`.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -58,6 +59,15 @@ Output contracts:
   `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
 - **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
   already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
+- **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
+  and `tidy`, and holds the lock until it exits, so reading, tidying and writing are one step.
+  `[t:lock]` creates `$lockdir` (`.<list name>.lock` next to the list) with `mkdir`, which only
+  one run can do, and writes its pid there. It retries every 0.1 s for 5 s, then dies. It takes
+  over a lock whose pid is no longer running. Two runs taking over the same dead lock at the same
+  moment can both proceed; that needs a killed `t` plus two runs waiting on it.
+- **Unlocking.** The top-level `trap unlock EXIT` releases the lock on every exit, including `die`
+  and `HUP`, `INT` and `TERM` (trapped to `exit`). `t edit` unlocks before `exec`, so an editing
+  session never blocks other runs. `t pick` holds the lock while fzf is open.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
   list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
   that; `help` and `commands` never touch the list.
@@ -65,7 +75,7 @@ Output contracts:
   in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` writes
   with `cat "$1" >"$f"`, so the file itself (symlink, permissions) is kept. The write is not
   atomic.
-- **Startup.** `zmodload zsh/datetime` must succeed, or `t` exits 1 before doing anything.
+- **Startup.** `zmodload zsh/datetime zsh/zselect` must succeed, or `t` exits 1 before doing anything.
 - **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
   `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
   list everything.
@@ -113,7 +123,8 @@ Output contracts:
 - Writes warnings and errors to stderr prefixed with `t: `; exits 1 on `[t:die]` and on an unknown
   command (after printing the usage to stderr). `t pick` exits with fzf's status when nothing is
   chosen.
-- No network access and no locking: concurrent runs are not serialised.
+- Creates and removes `$lockdir`, a directory holding a `pid` file, next to the list.
+- No network access.
 
 ## Verification
 

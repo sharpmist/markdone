@@ -381,6 +381,38 @@ fresh "$EMPTY"
 out=$(EDITOR="echo opened" "$T_BIN" edit 2>&1)
 check "EDITOR with arguments" "opened $TODO_FILE" "$out"
 
+# --- locking ---
+lock_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.lock"; }
+fresh "$EMPTY"
+for i in {1..20}; do "$T_BIN" add "parallel $i" >/dev/null 2>&1 & done; wait
+check "parallel adds: none lost" 20 "$(grep -c '^- \[ \] parallel ' "$TODO_FILE")"
+[[ ! -e $(lock_of) ]]; check "no lock left behind" 0 $?
+
+fresh "$EMPTY"
+sleep 60 & live=$!   # a running process to own the lock
+mkdir "$(lock_of)"; print $live >"$(lock_of)/pid"
+( zselect -t 50; rm -rf "$(lock_of)" ) &   # the owner unlocks after 0.5 s
+run add waited; check "waits for a lock that is released" "0|Added 1 (Today): waited" "$rc|$out"
+wait $!
+mkdir "$(lock_of)"; print $live >"$(lock_of)/pid"
+before=$(file); run add blocked
+check "gives up on a lock that is held" \
+  "1|t: the list is locked by another t (pid $live); if no t is running, remove $(lock_of)" "$rc|$out"
+check "held lock: list untouched" "$before" "$(file)"
+[[ -d $(lock_of) ]]; check "held lock: someone else's lock is kept" 0 $?
+kill $live; wait $live 2>/dev/null
+run add taken; check "takes over the lock of a process that is gone" "0|Added 2 (Today): taken" "$rc|$out"
+[[ ! -e $(lock_of) ]]; check "taken-over lock is released" 0 $?
+
+fresh "$EMPTY"
+out=$(EDITOR="ls -d $(lock_of)" "$T_BIN" edit 2>&1); rc=$?
+check "edit unlocks before starting the editor" 1 "$rc"
+
+fresh "$EMPTY"; chmod a-w "${TODO_FILE:h}"
+run; check "unwritable directory: can't lock" "1|t: could not create the lock $(lock_of)" "$rc|$out"
+chmod u+w "${TODO_FILE:h}"
+run help; [[ ! -e $(lock_of) ]]; check "help doesn't lock" 0 $?
+
 # --- edge cases ---
 fresh $'## Today\n- [x] orphan\n'
 run
