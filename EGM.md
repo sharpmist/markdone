@@ -42,7 +42,8 @@ The only coupling between the two components is the output of `t commands` and
   (`<insert text>\t<display text>`) is shared by `bin/t` and `shell/t.zsh`.
 - **Portability.** zsh, POSIX awk and perl on macOS and Linux; no GNU- or BSD-only tool flags.
 - **Tests never touch a real list.** `test/run.zsh` sets `TODO_FILE` to throwaway files and
-  points `ZDOTDIR` at an empty directory.
+  points `HOME` and `ZDOTDIR` at empty temporary directories, so no test can reach the real home
+  (Obsidian's vaults, `~/.zshenv`, `~/.zshrc`, `~/.local/bin`).
 
 ## Global Side Effects
 

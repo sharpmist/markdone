@@ -295,8 +295,9 @@ My todo list is managed with the `t` command. Run `t help` for all commands.
 test/run.zsh
 ```
 
-Runs `bin/t` against throwaway files, with an example Jira setup. It ignores your `~/.zshenv`, so
-your real list and settings are never touched. Besides the requirements above, it needs `python3`
+Runs `bin/t` against throwaway files, with an example Jira setup. It runs with a temporary home
+folder and ignores your `~/.zshenv`, so your real list, settings and Obsidian vaults are never
+touched. Besides the requirements above, it needs `python3`
 (for the terminal-output checks) and zsh's standard `zsh/zpty` and `zsh/zselect` modules (for the
 Tab completion checks).
 

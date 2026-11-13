@@ -18,9 +18,21 @@ dirs=(); trap 'chmod -R u+w $dirs 2>/dev/null; rm -rf $dirs' EXIT
 # bin/t runs under zsh, which reads $ZDOTDIR/.zshenv (default ~/.zshenv) on every start. Point it at
 # an empty dir so the user's TODO_* settings can't override the test's, or send t to the real list.
 export ZDOTDIR=$(mktemp -d); dirs+=$ZDOTDIR
+# A throwaway home as well, for everything this script and t run. Without it, a test that forgets to
+# set HOME reaches the real one: t init reads Obsidian's list of vaults there and can create a list
+# in a real vault and write ~/.zshenv; ./install links into ~/.local/bin and edits ~/.zshrc.
+real_home=$HOME
+export HOME=$(mktemp -d); dirs+=$HOME
 fresh() { dir=$(mktemp -d); dirs+=$dir; export TODO_FILE="$dir/Todo.md"; print -rn -- "$1" >"$TODO_FILE"; }
 file() { cat "$TODO_FILE"; }
 EMPTY=$'## Today\n\n## Later\n\n## Done\n'
+
+# --- the tests' own safety ---
+[[ $HOME != "$real_home" && -d $HOME && -z "$(ls -A "$HOME")" ]]
+check "tests run with an empty, throwaway HOME" 0 $?
+out=$(unset TODO_FILE; cd /; "$T_BIN" init --obsidian </dev/null 2>&1)
+check "t init --obsidian, run without its own HOME, sees no real vaults" \
+  "t: found no Obsidian vaults (Obsidian lists a vault once you've opened it); use t init <path> instead" "$out"
 
 # --- adding and listing ---
 fresh "$EMPTY"
