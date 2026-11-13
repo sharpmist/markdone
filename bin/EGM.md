@@ -21,6 +21,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t today <item>`                     | `promote`        | `[t:item]`, `[t:move]`          |
 | `t later <item>`                     | `demote`         | `[t:item]`, `[t:move]`          |
 | `t rm <item>`                        | `remove`         | `[t:item]`, `[t:remove]`        |
+| `t reword <item> <text>`             |                  | `[t:item]`, `[t:reword]`        |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
@@ -54,7 +55,7 @@ Output contracts:
 - `t list`: one line per open item, `<n>  <section> <text>` (`printf "%3d  %-6s %s\n"`).
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
-- Success messages: `Added <n> (<section>): <text>`, `Done: <text>`, `Removed: <text>`,
+- Success messages: `Added <n> (<section>): <text>`, `Done: <text>`, `Removed: <text>`, `Reworded <n> (<section>): <text>`,
   `Moved to <section> as <n>: <text>`, `Created <file>`,
   `Undid the last change; run t undo again to redo it`.
 
@@ -115,6 +116,9 @@ Output contracts:
   text containing a newline.
 - **Removing.** `[t:remove]` deletes only the line of open item `n`; done items can't be removed.
   `t undo` restores it.
+- **Rewording.** `t reword` takes the item from its first argument only and joins the rest into
+  the new text. `[t:reword]` replaces the text of open item `n` in place, with the same checks and
+  Jira linking as `t add` (non-empty, one line).
 - **Moves.** `[t:move]` dies when item `n` doesn't exist or is already in the target section, and
   removes and re-inserts the item in a single write.
 - **Insert position.** `[t:insert_item]` appends at the end of the section, before its trailing
@@ -130,7 +134,7 @@ Output contracts:
 
 ## Side Effects
 
-- Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `rm`, `pick` and
+- Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `rm`, `reword`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
 - Overwrites `$bak` with the current list before every write and sets its mtime to the list's
   (`[t:save]`); deletes it after a tidy that archived (`[t:tidy]`). `t undo` restores it.

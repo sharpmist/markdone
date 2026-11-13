@@ -29,6 +29,7 @@ Usage:
   t today <item>            move an item from Later to Today   (alias: promote)
   t later <item>            move an item from Today to Later   (alias: demote)
   t rm <item>               remove an open item                (alias: remove)
+  t reword <item> <text>    replace an open item's text, keeping its place
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
@@ -38,6 +39,7 @@ Usage:
 
 <item> is a number from t list, or text that matches exactly one open item
 (case-insensitive, any part of it), e.g. t done "logout fix".
+For reword, quote an <item> given as text with spaces: t reword "logout" "New text".
 
 Commands that read the list first tidy it: items ticked in an editor get
 today's date and move to Done; Done items older than 7 days move to
@@ -128,6 +130,7 @@ commands() {
     'today '            'today <item>'         'Move an item from Later to Today'         'today 3' \
     'later '            'later <item>'         'Move an item from Today to Later'         'later 1' \
     'rm '               'rm <item>'            'Remove an item (t undo brings it back)'   'rm "old idea"' \
+    'reword '           'reword <item> "<text>"' "Change an item's text"                 'reword 2 "Retest logout fix"' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
@@ -289,6 +292,26 @@ remove() {
   fi
 }
 
+# reword <n> <text>: replace open item n's text, keeping its section and position.
+reword() {
+  local n=$1 text=$2 tmp out
+  [[ $n == <-> && -n $text ]] || die "usage: t reword <item> <new text>"
+  [[ $text != *$'\n'* ]] || die "item must be a single line"
+  text=$(print -r -- "$text" | linkify all) || die "Jira linking failed (is perl installed?); nothing changed"
+  tmp=$(mktemp); out=$(mktemp)
+  if T_TEXT="$text" awk -v N="$n" -v out="$out" '
+      /^## / { sec = substr($0, 4) }
+      /^- \[ \] / && ++c==N { print "- [ ] " ENVIRON["T_TEXT"]; print c " (" sec ")" > out; found=1; next }
+      { print }
+      END { exit !found }' "$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Reworded $(<"$out"): $text" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no open item $n"
+  fi
+}
+
 # move <section> <command> <n>: move open item n to the end of <section> (Today or Later), in one write.
 move() {
   local to=$1 cmd=$2 n=$3 found sec item tmp out
@@ -388,6 +411,9 @@ case "$1" in
   today|promote) n=$(item today "${@:2}") || exit; move Today today "$n" ;;
   later|demote)  n=$(item later "${@:2}") || exit; move Later later "$n" ;;
   rm|remove)      n=$(item rm "${@:2}") || exit; remove "$n" ;;
+  reword)
+    [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
+    n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;

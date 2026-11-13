@@ -16,6 +16,7 @@ t done <item>             mark an item done                  (alias: d)
 t today <item>            move an item from Later to Today   (alias: promote)
 t later <item>            move an item from Today to Later   (alias: demote)
 t rm <item>               remove an open item                (alias: remove)
+t reword <item> <text>    replace an open item's text, keeping its place
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
@@ -27,6 +28,8 @@ t commands                list commands with examples, tab-separated (used by Ta
 `<item>` is either a number from `t list` or text that matches exactly one open item: any part of
 it, ignoring case, such as `t done "logout fix"` or `t done PROJ-123`. If the text matches several
 items, `t` lists them and changes nothing. A reference made only of digits is always a number.
+For `t reword`, the first argument names the item and the rest is the new text, so quote an item
+given as text with spaces: `t reword "logout" "Retest logout fix"`.
 
 Commands that read the list first tidy it: items ticked in an editor get today's date and move to
 `## Done`, and Done items older than 7 days move to `Archive <year>.md` next to the list.
@@ -158,7 +161,7 @@ Add something like this to your agent's instructions (e.g. `~/.claude/CLAUDE.md`
 # Personal todo list
 My todo list is managed with the `t` command. Run `t help` for all commands.
 - Add an item: `t add "<text>"` (Today) or `t add --later "<text>"` (Later). One line.
-- Remove an item: `t rm "<text>"`. Undo the last change: `t undo`.
+- Remove an item: `t rm "<text>"`. Change its text: `t reword "<text>" "<new text>"`. Undo the last change: `t undo`.
 - List open items: `t list`. Mark one done by a unique part of its text: `t done "<text>"`. If
   that matches several items, `t` lists them; use more of the text. Numbers from `t list` also
   work, but only until the list changes.

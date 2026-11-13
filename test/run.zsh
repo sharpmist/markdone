@@ -256,6 +256,36 @@ run rm "done item"; check "rm only takes open items" "1|t: no open item matches 
 run rm;            check "rm without an item fails" "1|t: usage: t rm <item>" "$rc|$out"
 check "file unchanged after failed rm" "$before" "$(file)"
 
+# --- reword ---
+fresh "## Today
+- [ ] first
+- [ ] Retest logout
+
+## Later
+- [ ] third
+
+## Done
+"
+run reword 2 "Retest logout fix PROJ-9"
+check "reword by number, linking keys" "0|Reworded 2 (Today): Retest logout fix [PROJ-9](https://jira.example.com/browse/PROJ-9)" "$rc|$out"
+run reword third Plan the next release
+check "reword by text, new text from several words" "0|Reworded 3 (Later): Plan the next release" "$rc|$out"
+check "reword keeps section and position" "## Today
+- [ ] first
+- [ ] Retest logout fix [PROJ-9](https://jira.example.com/browse/PROJ-9)
+
+## Later
+- [ ] Plan the next release
+
+## Done" "$(file)"
+run undo;  check "reword can be undone" "- [ ] third" "$(grep third "$TODO_FILE")"
+before=$(file)
+run reword first;   check "reword without new text fails" "1|t: usage: t reword <item> <new text>" "$rc|$out"
+run reword;         check "reword without arguments fails" "1|t: usage: t reword <item> <new text>" "$rc|$out"
+run reword 9 x;     check "reword with no such item fails" "1|t: no open item 9" "$rc|$out"
+run reword 1 "$(printf 'two\nlines')"; check "reword to several lines fails" "1|t: item must be a single line" "$rc|$out"
+check "file unchanged after failed rewords" "$before" "$(file)"
+
 # --- listing done items ---
 fresh "## Today
 - [ ] Open one
@@ -376,7 +406,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 16 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 17 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
