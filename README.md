@@ -164,7 +164,8 @@ if the item you pick was changed meanwhile, it does nothing and says so.
 Before every change, `t` copies the list to a hidden `.Todo.md.bak` next to it, so a crash while
 writing can't lose it. `t undo` puts that copy back, undoing the last change `t` made; running it
 again redoes the change. It refuses when the list was changed since `t` last wrote it (in an editor
-or by a sync), so it never throws such a change away. A change that archived done items can't be
+or by a sync), so it never throws such a change away: `t` keeps a checksum of what it last wrote
+in a hidden `.Todo.md.sum` and compares the list with it. A change that archived done items can't be
 undone, since that would archive them twice.
 
 `t edit` opens the list in `$EDITOR`, or `nvim` if `$EDITOR` isn't set. `$EDITOR` may include

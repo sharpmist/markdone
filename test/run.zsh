@@ -651,10 +651,32 @@ check "undo refuses after a hand edit" \
   "1|t: the list was changed since t last wrote it; not undoing (t's previous version is in $(bak_of))" "$rc|$out"
 check "refused undo leaves the list alone" "$before" "$(file)"
 
-# undo must not tidy first: that would be a change of its own
+# an edit within the same second keeps the mtime (1-second filesystems): only the content tells
 fresh "$EMPTY"
-run add one; run add two
-print -r -- "- [x] ticked by hand" >>"$TODO_FILE"; touch -r "$TODO_FILE" "$(bak_of)"
+run add one; print -r -- "- [ ] typed by hand" >>"$TODO_FILE"; touch -r "$(bak_of)" "$TODO_FILE"
+before=$(file); run undo
+check "undo refuses after a hand edit that kept the mtime" \
+  "1|t: the list was changed since t last wrote it; not undoing (t's previous version is in $(bak_of))" "$rc|$out"
+check "refused undo leaves the list alone (same mtime)" "$before" "$(file)"
+
+# the checksum of t's last write is missing (written by t 0.1.0, or lost): don't guess
+sum_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.sum"; }
+fresh "$EMPTY"
+run add one; [[ -s $(sum_of) ]]; check "each write records a checksum" 0 $?
+rm "$(sum_of)"; run undo
+check "undo without a checksum refuses" \
+  "1|t: can't tell whether the list was changed since t last wrote it; not undoing (t's previous version is in $(bak_of))" "$rc|$out"
+fresh "$EMPTY"
+run add one; chmod a-w "$(sum_of)"; run add two
+check "checksum write fails: the change is made, with a warning" \
+  "0|t: could not write $(sum_of); t undo won't undo this change|Added 2 (Today): two" "$rc|${(j:|:)${(f)out}}"
+run undo; check "checksum write failed: undo refuses" 1 "$rc"
+check "checksum write failed: list kept" $'## Today\n- [ ] one\n- [ ] two\n\n## Later\n\n## Done' "$(file)"
+
+# undo must not tidy first: that would be a change of its own. Here tidy would link PROJ-1, which
+# t added while linking was off.
+fresh "$EMPTY"
+TODO_JIRA_KEYS= run add one; TODO_JIRA_KEYS= run add "two PROJ-1"
 run undo; check "undo doesn't tidy first" $'## Today\n- [ ] one\n\n## Later\n\n## Done' "$(file)"
 
 # undoing a tidy that archived would archive the same items twice
