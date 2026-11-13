@@ -44,7 +44,8 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
 - `Archive <year>.md` files are created and appended to in the list's directory.
 - Sourcing `shell/t.zsh` rebinds Tab in the interactive zsh session.
 - A hidden backup, `.<list name>.bak`, next to the list holds the list as it was before `t`'s last
-  write. `t undo` restores it.
+  write. `t undo` restores it, but only while the list still matches the checksum of `t`'s last
+  write, kept in `.<list name>.sum`.
 - A hidden, empty lock file, `.<list name>.lock`, sits next to the list; `t` holds a lock on it
   while it runs.
 - No network access.

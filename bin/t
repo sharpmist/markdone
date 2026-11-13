@@ -6,15 +6,17 @@
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
 # The release version. A pushed git tag v<version> must match it (checked in CI).
-T_VERSION=0.1.1
+T_VERSION=0.1.2
 
 zmodload zsh/datetime zsh/system || exit 1
 
 f="${TODO_FILE:-$HOME/todo/Todo.md}"
 
-# The lock and the backup sit next to the list, hidden so notes apps ignore them; see lock() and save().
+# The lock, the backup and its checksum sit next to the list, hidden so notes apps ignore them; see
+# lock() and save().
 lockfile="${f:h}/.${f:t}.lock"
 bak="${f:h}/.${f:t}.bak"
+sum="${f:h}/.${f:t}.sum"   # checksum of what t last wrote, for undo
 
 # Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
 # text. check_jira validates both before the list is read.
@@ -105,8 +107,8 @@ check_jira() {
 
 # save <tmp> [more temp files]: rewrite the list with <tmp> in place (keeps the file itself, so
 # symlinks and permissions survive; not atomic). First copies the current list to $bak, so a crash
-# during the write can't lose it; if that copy fails, the list isn't written. On failure removes
-# the temp files and exits.
+# during the write can't lose it; if that copy fails, the list isn't written. Then records the
+# checksum of what it wrote in $sum, for undo. On failure removes the temp files and exits.
 save() {
   if ! (umask 077; cat -- "$f" >"$bak"); then
     rm -f "$@"; die "could not write the backup $bak; list not changed"
@@ -114,8 +116,12 @@ save() {
   if ! cat "$1" >"$f"; then
     rm -f "$@"; die "could not write $f (the previous version is in $bak)"
   fi
-  # Same mtime on both marks the backup as the version just before this write; undo checks it.
-  touch -r "$f" "$bak" || warn "could not set the time of $bak; t undo won't undo this change"
+  # undo restores $bak only while the list still has this checksum, i.e. nothing else changed it.
+  # Content, not mtimes: on filesystems with 1-second times, an edit right after t's write would
+  # keep the mtime. A crash before this leaves the old checksum, which no longer matches.
+  if ! (umask 077; cksum <"$f" >"$sum") 2>/dev/null; then
+    rm -f -- "$sum"; warn "could not write $sum; t undo won't undo this change"
+  fi
   return 0
 }
 
@@ -423,11 +429,13 @@ pick() {
 # so a second undo redoes. Refuses when the list was changed since that write (by hand, in an
 # editor or a sync), since restoring the backup would throw that change away.
 undo() {
-  local tmp
+  local tmp now
   [[ -f $bak ]] || die "nothing to undo"
-  if [[ $f -nt $bak || $bak -nt $f ]]; then
+  [[ -f $sum ]] ||
+    die "can't tell whether the list was changed since t last wrote it; not undoing (t's previous version is in $bak)"
+  now=$(cksum <"$f") || die "could not read $f; nothing undone"
+  [[ $now == "$(<"$sum")" ]] ||
     die "the list was changed since t last wrote it; not undoing (t's previous version is in $bak)"
-  fi
   tmp=$(mktemp) || die "could not create a temp file; nothing undone"
   if ! cat -- "$bak" >"$tmp"; then rm -f "$tmp"; die "could not read $bak; nothing undone"; fi
   save "$tmp"

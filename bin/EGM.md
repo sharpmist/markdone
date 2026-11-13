@@ -93,10 +93,12 @@ Output contracts:
   writing when that fails. It then writes with `cat "$1" >"$f"`, so the file itself (symlink,
   permissions) is kept. The write is not atomic; after a crash during it, `$bak` holds the list as
   it was.
-- **Undo.** `[t:save]` gives `$bak` the list's mtime after each write (`touch -r`). `[t:undo]`
-  restores `$bak` only when the mtimes still match, so a change made outside `t` since then is
-  never thrown away; it restores through `[t:save]`, so a second undo redoes. It runs under the
-  lock but before `check_jira` and `tidy`, which would otherwise make a change of their own. A
+- **Undo.** After each write, `[t:save]` records `cksum` of the list in `$sum`
+  (`.<list name>.sum`). `[t:undo]` restores `$bak` only when the list still has that checksum, so
+  a change made outside `t` since then is never thrown away, even within the same second (content,
+  not mtimes). Without `$sum` it refuses too; if writing `$sum` fails, `save` deletes it and
+  warns. Undo restores through `[t:save]`, so a second undo redoes. It runs under the lock but
+  before `check_jira` and `tidy`, which would otherwise make a change of their own. A
   `[t:tidy]` that archived items deletes `$bak`, because restoring would archive them twice; undo
   then dies with `nothing to undo`.
 - **Startup.** `zmodload zsh/datetime zsh/system` must succeed, or `t` exits 1 before doing
@@ -154,13 +156,14 @@ Output contracts:
 
 - Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `rm`, `reword`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
-- Overwrites `$bak` with the current list before every write and sets its mtime to the list's
-  (`[t:save]`); deletes it after a tidy that archived (`[t:tidy]`). `t undo` restores it.
+- Overwrites `$bak` with the current list before every write, and `$sum` with the checksum of
+  the new list after it (`[t:save]`); deletes `$bak` after a tidy that archived (`[t:tidy]`).
+  `t undo` restores `$bak`.
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
 - Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.
 - Creates temp files with `mktemp` and removes them before returning.
-- Runs external programs: `awk`, `date`, `cmp`, `cut`, `sort`, `grep`, `cat`, `mktemp`; `perl`
+- Runs external programs: `awk`, `date`, `cmp`, `cksum`, `cut`, `sort`, `grep`, `cat`, `mktemp`; `perl`
   when Jira linking is on (`[t:linkify]`) or stdout is a terminal (`[t:render]`); `fzf` for
   `t pick`; `$EDITOR` (via `exec`) for `t edit`.
 - Writes OSC 8 escape sequences to stdout when it is a terminal (`[t:render]`).
