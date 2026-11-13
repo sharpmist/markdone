@@ -1,7 +1,8 @@
 #!/usr/bin/env zsh
-# t - personal todo list kept as one Markdown file.
+# t - personal todo lists kept as Markdown files, one file per list, in one folder.
 # Run `t help` for usage. Configured with environment variables (see README.md):
-#   TODO_FILE       the list (default: ~/todo/Todo.md)
+#   TODO_FILE       the default list (default: ~/todo/Todo.md); its folder holds all the lists
+#   TODO_LIST       the list to use, by name, instead of the current one (optional)
 #   TODO_JIRA_KEYS  Jira project keys to link, space-separated, e.g. "PROJ OPS"; empty = no links
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
@@ -10,13 +11,25 @@ T_VERSION=0.2.0
 
 zmodload zsh/datetime zsh/system || exit 1
 
-f="${TODO_FILE:-$HOME/todo/Todo.md}"
+# The lists: every *.md file directly in the folder of TODO_FILE, the default list. A list's name is
+# its file name without .md. Archives go to the Archive subfolder, as "<list> <year>.md".
+deff="${TODO_FILE:-$HOME/todo/Todo.md}"
+ldir=${deff:h}
+dname=${deff:t:r}
+adir=$ldir/Archive
+curfile=$ldir/.current     # the name of the current list (t use); none means the default list
+dirlock=$ldir/.lists.lock  # held while lists are added, removed or renamed
 
-# The lock, the backup and its checksum sit next to the list, hidden so notes apps ignore them; see
-# lock() and save().
-lockfile="${f:h}/.${f:t}.lock"
-bak="${f:h}/.${f:t}.bak"
-sum="${f:h}/.${f:t}.sum"   # checksum of what t last wrote, for undo
+# The list this run works on; set_list changes all of these. The lock, the backup and its checksum
+# sit next to the list, hidden so notes apps ignore them; see lock() and save().
+set_list() {
+  name=$1
+  if [[ $name == "$dname" ]]; then f=$deff; else f=$ldir/$name.md; fi
+  lockfile="${f:h}/.${f:t}.lock"
+  bak="${f:h}/.${f:t}.bak"
+  sum="${f:h}/.${f:t}.sum"   # checksum of what t last wrote, for undo
+}
+set_list "$dname"
 
 # Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
 # text. check_jira validates both before the list is read.
@@ -41,19 +54,30 @@ Usage:
   t undo                    undo the last change; run it again to redo
   t init [<path>]           create the list with its three headings (never overwrites)
   t init --obsidian         create the list in an Obsidian vault you pick, in its Todo folder
+
+  t lists [--json]          show the lists, with open items; * marks the current one
+  t lists add <name>        create another list, next to the default one
+  t lists rm [--force] <name>   delete a list (with open items only with --force)
+  t lists rename <old> <new>    rename a list and its archives
+  t use [<list>]            switch the current list (alone: pick one with fzf)
+  t @<list> <command>       run one command on another list, e.g. t @work add "Fix the build"
+
   t help                    show this help                     (-h, --help)
   t version                 show the version                   (--version)
   t commands                list commands with examples, tab-separated (used by Tab completion)
-  t complete <command>      list the items <command> takes, tab-separated (used by Tab completion)
+  t complete <words>        list what Tab offers after t <words>, tab-separated (used by Tab completion)
 
 <item> is a number from t list, or text that matches exactly one open item
 (case-insensitive, any part of it), e.g. t done "logout fix".
 For reword, quote an <item> given as text with spaces: t reword "logout" "New text".
 
-Commands that read the list first tidy it: items ticked in an editor get
+A command without @<list> uses TODO_LIST if set, else the list t use chose,
+else the default list (TODO_FILE). Every .md file in its folder is a list.
+
+Commands that read a list first tidy it: items ticked in an editor get
 today's date and move to Done; Done items older than 7 days move to
-"Archive <year>.md" next to the list; Jira keys like PROJ-123 become links
-when TODO_JIRA_KEYS and TODO_JIRA_URL are set.
+"Archive/<list> <year>.md" in the lists folder; Jira keys like PROJ-123 become
+links when TODO_JIRA_KEYS and TODO_JIRA_URL are set.
 EOF
 }
 
@@ -163,6 +187,12 @@ commands() {
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
     'init'              'init'                 'Create the list (never overwrites)'       'init' \
     'init --obsidian'   'init --obsidian'      'Create the list in an Obsidian vault'     'init --obsidian' \
+    'lists'             'lists'                'Show your lists; * marks the current one' 'lists' \
+    'lists add ""'      'lists add "<name>"'   'Create another list'                      'lists add "Work"' \
+    'lists rm '         'lists rm <name>'      'Delete a list (only without open items)'  'lists rm Work' \
+    'lists rename '     'lists rename <old> <new>' 'Rename a list and its archives'       'lists rename Work Job' \
+    'use '              'use <list>'           'Switch the current list'                  'use Work' \
+    '@'                 '@<list> <command>'    'Run one command on another list'          '@Work add "Fix the build"' \
     'version'           'version'              'Show the version'                         'version' \
     'help'              'help'                 'Show help'                                'help'
   do
@@ -199,8 +229,8 @@ tidy() {
     # Append to the archives first and rewrite the list only if all of that worked: a crash or
     # failed write in between can duplicate an archived item, but never lose one.
     for y in $(cut -c7-10 "$arch" | sort -u); do
-      af="${f:h}/Archive $y.md"
-      if ! { [[ -f $af ]] || printf '# Archive %s\n\n' "$y" >"$af"; } ||
+      af="$adir/$name $y.md"
+      if ! { [[ -f $af ]] || { mkdir -p -- "$adir" && printf '# %s archive %s\n\n' "$name" "$y" >"$af" } } ||
          ! grep "^- \[x\] $y-" "$arch" | sort >>"$af"; then
         ok=0; break
       fi
@@ -219,21 +249,27 @@ tidy() {
 # list [section]: open items, numbered across the whole list; with a section, only that section's
 # items are shown, keeping the same numbers so they work with done/today/later.
 list() {
+  # With several lists, a terminal shows which one this is (in bold); pipes and agents get only items.
+  local -a all
+  if [[ -t 1 ]]; then
+    all=("${(@f)$(list_names)}")
+    (( $#all > 1 )) && print -r -- $'\e[1m'"$name"$'\e[0m'
+  fi
   awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) printf "%3d  %-6s %s\n", n, sec, substr($0,7)}' "$f" | render
 }
 
 # list_json [section]: open items as a JSON array, one object per line, in t list order:
-# {"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}. text is the item as stored (Markdown).
+# {"list":"Todo","n":1,"section":"Today","text":"...","jira":["PROJ-1"]}. text is the item as stored (Markdown).
 # jira lists the configured Jira keys in it, in order, once each; empty when linking is off. Never
 # rendered for a terminal, so the output is always plain JSON.
 list_json() {
   awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) print n "\t" sec "\t" substr($0,7)}' "$f" |
-    T_KEYS="$JIRA_KEYS" perl -ne '
+    T_KEYS="$JIRA_KEYS" T_LIST="$name" perl -ne '
       BEGIN { $k = join "|", map quotemeta, split " ", $ENV{T_KEYS} }
       sub js { my $v = shift; $v =~ s/(["\\])/\\$1/g; $v =~ s/([\x00-\x1f])/sprintf "\\u%04x", ord $1/ge; "\"$v\"" }
       chomp; my ($n, $s, $t) = split /\t/, $_, 3; my %seen;
       my @j = $k eq "" ? () : grep { !$seen{$_}++ } $t =~ /(?<![\w\/-])((?:$k)-\d+)(?![\w-])/g;
-      push @o, sprintf q{{"n":%d,"section":%s,"text":%s,"jira":[%s]}}, $n, js($s), js($t), join ",", map { js($_) } @j;
+      push @o, sprintf q{{"list":%s,"n":%d,"section":%s,"text":%s,"jira":[%s]}}, js($ENV{T_LIST}), $n, js($s), js($t), join ",", map { js($_) } @j;
       END { print @o ? "[\n" . join(",\n", @o) . "\n]\n" : "[]\n" }'
 }
 
@@ -243,7 +279,7 @@ list_done() {
   {
     awk '/^## /{indone=($0=="## Done")} indone && /^- \[x\] /' "$f"
     if (( $1 )); then
-      for a in "${f:h}"/Archive\ <->.md(N); do grep '^- \[x\] ' "$a"; done
+      for a in "$adir/$name "<->.md(N); do grep '^- \[x\] ' "$a"; done
     fi
   } | sort -s -r -k3,3 | awk '{print substr($0,7,10) "  " substr($0,18)}' | render
 }
@@ -537,14 +573,235 @@ lock() {
   (( rc == 0 )) || die "could not lock $lockfile"
 }
 
+# list_names: the names of the lists, one per line, sorted: every *.md file directly in $ldir
+# (regular files only, not hidden ones), plus the default list when its file exists. Archives from
+# before there were several lists ("Archive <year>.md", see migrate_archives) aren't lists.
+list_names() {
+  local -a n
+  n=("$ldir"/*.md(N.:t:r))
+  n=(${n:#Archive <->})
+  [[ -f $deff ]] && n+=("$dname")
+  (( $#n )) && print -rl -- ${(ou)n}
+  return 0
+}
+
+# find_list <name>: print the name of the list <name> means: an exact match, or else the only list
+# whose name matches ignoring case (so @work finds Work). Fails when there is none.
+find_list() {
+  local -a all hit; local n
+  all=("${(@f)$(list_names)}")
+  (( ${all[(Ie)$1]} )) && { print -r -- "$1"; return 0 }
+  for n in $all; do [[ ${(L)n} == "${(L)1}" ]] && hit+=("$n"); done
+  (( $#hit == 1 )) && { print -r -- "${hit[1]}"; return 0 }
+  return 1
+}
+
+# check_name <name>: dies unless <name> can be a list name: not empty, no / or tab, not starting
+# with . or @, and not ending in .md (the name is the file name without it).
+check_name() {
+  [[ -n $1 && $1 != *[/$'\t\n']* && $1 != [.@]* && $1 != *.md && $1 != "Archive "<-> ]] ||
+    die "'$1' can't be a list name (no /, no leading . or @, no .md at the end)"
+}
+
+# current_name: the list a command uses when it names none: TODO_LIST, else the one t use chose
+# (in $curfile), else the default list. A current list that no longer exists falls back to the
+# default list, with a warning; a TODO_LIST that names no list is an error.
+current_name() {
+  local c n
+  if [[ -n ${TODO_LIST-} ]]; then
+    n=$(find_list "$TODO_LIST") || die "TODO_LIST is '$TODO_LIST', but there's no such list; t lists shows them"
+    print -r -- "$n"; return 0
+  fi
+  [[ -r $curfile ]] && c=$(<"$curfile")
+  if [[ -n $c ]]; then
+    n=$(find_list "$c") && { print -r -- "$n"; return 0 }
+    warn "the current list '$c' is gone; using $dname (t use picks another)"
+  fi
+  print -r -- "$dname"
+}
+
+# open_count <file>: the number of open items in a list file.
+open_count() { local c; c=$(grep -c '^- \[ \] ' "$1" 2>/dev/null); print -r -- ${c:-0} }
+
+# js <string>: <string> as a JSON string.
+js() {
+  local v=${1//\\/\\\\}; v=${v//\"/\\\"}; v=${v//$'\t'/\\t}; v=${v//$'\n'/\\n}
+  print -rn -- "\"$v\""
+}
+
+# dir_lock: take the lists folder's lock, held by t lists add/rm/rename and t use until t exits,
+# so two of them can't trip over each other. Same rules as lock().
+dir_lock() {
+  local rc
+  [[ -d $ldir ]] || die "$ldir not found; create your first list with 't init'"
+  [[ -f $dirlock ]] || { : >>"$dirlock" } 2>/dev/null || die "could not create the lock file $dirlock"
+  zsystem flock -t 10 -i 0.05 -f dirlockfd "$dirlock" 2>/dev/null; rc=$?
+  (( rc == 2 )) && die "another t has been changing the lists for 10 seconds; try again when it's done"
+  (( rc == 0 )) || die "could not lock $dirlock"
+}
+
+# migrate_archives: archives used to be "Archive <year>.md" next to the single list. Move them to
+# $adir as the default list's, appending to an archive already there. Runs under the default
+# list's lock, as tidy writes those archives under it too.
+migrate_archives() {
+  local a y to
+  for a in "$ldir"/Archive\ <->.md(N.); do
+    y=${${a:t:r}#Archive }; to="$adir/$dname $y.md"
+    mkdir -p -- "$adir" || { warn "could not create $adir; old archives left where they are"; return 0 }
+    if [[ -e $to ]]; then
+      grep '^- \[x\] ' "$a" | sort >>"$to" && rm -f -- "$a" ||
+        { warn "could not move $a into $to"; return 0 }
+    else
+      mv -- "$a" "$to" || { warn "could not move $a to $to"; return 0 }
+    fi
+  done
+  return 0
+}
+
+# lists_cmd [--json]: the lists, the current one marked, with their open items:
+# "* Todo   3 open". --json: [{"name":"Todo","open":3,"current":true}], one object per line.
+lists_cmd() {
+  local cur n o; local -a all objs
+  [[ -z $1 || $1 == --json ]] && (( $# <= 1 )) || die "usage: t lists [--json] | t lists add|rm|rename …"
+  all=("${(@f)$(list_names)}"); all=(${all:#})
+  cur=$(current_name)
+  if [[ $1 == --json ]]; then
+    for n in $all; do
+      set_list "$n"; objs+=("{\"name\":$(js "$n"),\"open\":$(open_count "$f"),\"current\":$([[ $n == "$cur" ]] && print true || print false)}")
+    done
+    if (( $#objs )); then print -r -- "["; print -r -- "${(pj:,\n:)objs}"; print -r -- "]"; else print -r -- "[]"; fi
+    return 0
+  fi
+  (( $#all )) || die "no lists in $ldir; create one with 't init'"
+  local w=0; for n in $all; do (( ${#n} > w )) && w=${#n}; done
+  for n in $all; do
+    set_list "$n"; o=$(open_count "$f")
+    [[ -n $tabbed ]] && print -rn -- "$n"$'\t'
+    printf '%s %-*s %3d open\n' "$([[ $n == "$cur" ]] && print '*' || print ' ')" $w "$n" "$o"
+  done
+}
+
+# lists_add <name>: create a list with the three headings. Never overwrites.
+lists_add() {
+  (( $# == 1 )) || die "usage: t lists add <name>"
+  check_name "$1"
+  dir_lock
+  find_list "$1" >/dev/null && die "there's already a list called $(find_list "$1")"
+  set_list "$1"
+  [[ ! -e $f && ! -L $f ]] || die "$f already exists; not changed"
+  printf '## Today\n\n## Later\n\n## Done\n' >"$f" || die "could not write $f"
+  print -r -- "Created the list $1; use it with t @${(q-)1} … or t use ${(q-)1}"
+}
+
+# lists_rm [--force] <name>: delete a list's file and its hidden lock, backup and checksum; its
+# archives stay. Refuses the default and the current list, and a list with open items unless
+# --force.
+lists_rm() {
+  local force=0 n o
+  [[ $1 == --force ]] && { force=1; shift }
+  (( $# == 1 )) || die "usage: t lists rm [--force] <name>"
+  dir_lock
+  n=$(find_list "$1") || die "no list called '$1'; t lists shows them"
+  [[ $n != "$dname" ]] || die "$n is your default list (TODO_FILE); it can't be deleted"
+  [[ $n != "$(current_name)" ]] || die "$n is the current list; switch with t use first"
+  set_list "$n"; lock
+  o=$(open_count "$f")
+  (( o == 0 || force )) || die "$n has $o open item$( (( o == 1 )) || print s); finish or move them first, or use t lists rm --force $n"
+  rm -f -- "$f" "$bak" "$sum" "$lockfile" || die "could not delete $f"
+  local with=; (( o )) && with=" with its $o open item$( (( o == 1 )) || print s)"
+  print -r -- "Deleted the list $n$with; its archives stay in $adir"
+}
+
+# lists_rename <old> <new>: rename a list, its archives and its hidden files, and keep it current
+# if it was. The default list can't be renamed, since TODO_FILE names it.
+lists_rename() {
+  local n from y a was_cur=0
+  (( $# == 2 )) || die "usage: t lists rename <old name> <new name>"
+  check_name "$2"
+  dir_lock
+  n=$(find_list "$1") || die "no list called '$1'; t lists shows them"
+  [[ $n != "$dname" ]] || die "$n is your default list, named by TODO_FILE; it can't be renamed"
+  if find_list "$2" >/dev/null && [[ ${(L)$(find_list "$2")} != "${(L)n}" ]]; then
+    die "there's already a list called $(find_list "$2")"
+  fi
+  # Current by t use's choice (TODO_LIST, which may say otherwise, is the caller's business).
+  [[ -r $curfile && ${(L)"$(<"$curfile")"} == "${(L)n}" ]] && was_cur=1
+  set_list "$n"; lock; from=$f
+  local obak=$bak osum=$sum olock=$lockfile
+  set_list "$2"
+  mv -- "$from" "$f" || die "could not rename $from"
+  [[ -e $obak ]] && mv -- "$obak" "$bak"; [[ -e $osum ]] && mv -- "$osum" "$sum"; rm -f -- "$olock"
+  for a in "$adir/$n "<->.md(N.); do y=${a:t:r}; y=${y##* }; mv -- "$a" "$adir/$2 $y.md" || warn "could not rename $a"; done
+  (( was_cur )) && { print -r -- "$2" >"$curfile.$$" && mv -- "$curfile.$$" "$curfile" || warn "could not update $curfile" }
+  print -r -- "Renamed the list $n to $2"
+}
+
+# use_cmd [<name>]: make <name> the current list, for every terminal and agent that doesn't name
+# one; the default list clears the choice. Without a name, picks a list with fzf in a terminal.
+use_cmd() {
+  local want n pick
+  (( $# <= 1 )) || die "usage: t use <list>"
+  if (( $# )); then
+    want=$1
+  else
+    [[ -t 0 && -t 1 ]] && (( $+commands[fzf] )) ||
+      die "usage: t use <list> (in a terminal with fzf, t use alone picks one); t lists shows them"
+    pick=$(tabbed=1 lists_cmd | fzf --height=40% --reverse --delimiter=$'\t' --with-nth=2 \
+      --prompt='use> ' --header='Pick the list to use (Esc cancels)') || exit
+    want=${pick%%$'\t'*}
+  fi
+  dir_lock
+  n=$(find_list "$want") || die "no list called '$want'; t lists shows them"
+  if [[ $n == "$dname" ]]; then
+    rm -f -- "$curfile" || die "could not update $curfile"
+  else
+    { print -r -- "$n" >"$curfile.$$" && mv -- "$curfile.$$" "$curfile" } || { rm -f -- "$curfile.$$"; die "could not write $curfile" }
+  fi
+  set_list "$n"
+  print -r -- "Now using $n ($(open_count "$f") open)"
+  [[ -n ${TODO_LIST-} ]] && warn "TODO_LIST is set to '$TODO_LIST', which still wins where it's set"
+  return 0
+}
+
 # ITEM_CMDS: the commands that take an <item>, with their aliases.
 ITEM_CMDS=(done d today promote later demote rm remove reword)
+
+# list_choices <prefix>: the lists for Tab completion, "<prefix><name> \t<t lists line>", with the
+# name quoted for the shell when needed.
+list_choices() {
+  local n d
+  tabbed=1 lists_cmd | while IFS=$'\t' read -r n d; do print -r -- "$1${(q-)n} "$'\t'"$d"; done
+}
+
+# complete_cmd <words...>: what Tab offers after "t <words> " (shell/t.zsh), one line per choice,
+# "<text to insert>\t<what fzf shows>". Only a list's items need the list itself: for those it sets
+# $sel and $ccmd and returns, and the main flow locks and tidies the list as usual. Everything else
+# is printed here, and t exits without reading any list.
+#   @                         the lists, inserted as @<name>
+#   @<list>                   the commands, as after "t "
+#   [@<list>] <item command>  that list's open items (complete_items)
+#   use, lists rm, lists rename  the lists
+#   lists                     its subcommands
+complete_cmd() {
+  local -a w=("$@")
+  if [[ ${w[1]} == @?* ]]; then sel=${w[1]#@}; w=("${(@)w[2,-1]}"); fi
+  case "${(j: :)w}" in
+    @) list_choices @; exit 0 ;;
+    "") [[ -n $sel ]] && commands; exit 0 ;;
+    use|"lists rm"|"lists remove"|"lists rename") list_choices ""; exit 0 ;;
+    lists)
+      printf '%s\t%s\n' 'add ""' 'add "<name>"          Create a list' 'rm ' 'rm <name>             Delete a list' \
+        'rename ' 'rename <old> <new>    Rename a list' '--json' '--json                The lists as JSON'
+      exit 0 ;;
+  esac
+  (( $#w == 1 && ${ITEM_CMDS[(Ie)${w[1]}]} )) || exit 0
+  ccmd=${w[1]}
+}
 
 # complete_items <command>: the open items <command> can take, for Tab completion (shell/t.zsh). One
 # line per item, "<text to insert after 't <command> '>\t<the t list line>", with links shown as
 # their text. today offers Later's items and later Today's; for reword the insert ends in "" so the
-# cursor lands between the quotes for the new text. For a command that takes no item, t exits
-# before reading the list and prints nothing (first case block).
+# cursor lands between the quotes for the new text. Called for the list complete_cmd chose.
 complete_items() {
   local only= suffix=
   case $1 in
@@ -608,16 +865,49 @@ undo() {
   print -r -- "Undid the last change; run t undo again to redo it"
 }
 
-# Commands that don't need the list.
+# @<list> as the first argument: the list this one command works on.
+sel=
+if [[ $1 == @* ]]; then
+  sel=${1#@}; shift
+  [[ -n $sel ]] || die "usage: t @<list> <command>, e.g. t @work add \"Fix the build\""
+fi
+
+# Commands that don't need a list.
 case "$1" in
   -h|--help|help) usage; exit 0 ;;
   --version|version) print -r -- "t $T_VERSION"; exit 0 ;;
   commands) commands; exit 0 ;;
-  complete) (( ${ITEM_CMDS[(Ie)$2]} )) || exit 0 ;;   # no item to offer: don't touch the list
+  init|lists|use) [[ -z $sel ]] || die "t $1 works on the lists themselves; it doesn't take @$sel" ;|
   init) shift; init "$@"; exit 0 ;;
+  lists)
+    shift
+    case $1 in
+      add) shift; lists_add "$@" ;;
+      rm|remove) shift; lists_rm "$@" ;;
+      rename) shift; lists_rename "$@" ;;
+      *) lists_cmd "$@" ;;
+    esac
+    exit 0 ;;
+  use) shift; use_cmd "$@"; exit 0 ;;
+  complete) complete_cmd "${@:2}" ;;   # exits, unless it offers a list's items
 esac
 
-[[ -f $f ]] || die "$f not found; create it with 't init', or set TODO_FILE to your list"
+if [[ -n $sel ]]; then
+  n=$(find_list "$sel") || die "no list called '$sel'; t lists shows them"
+else
+  n=$(current_name) || exit
+fi
+set_list "$n"
+if [[ ! -f $f ]]; then
+  [[ $name == "$dname" ]] && die "$f not found; create it with 't init', or set TODO_FILE to your list"
+  die "the list $name is gone ($f not found)"
+fi
+# Archives from before there were several lists belong to the default list; move them to $adir,
+# under that list's lock (in a subshell, which releases it when done, when it isn't this one).
+old_archives=("$ldir"/Archive\ <->.md(N.))
+if (( $#old_archives )); then
+  if [[ $name == "$dname" ]]; then lock; migrate_archives; else ( set_list "$dname"; lock; migrate_archives ); fi
+fi
 lock
 # undo runs before tidy: tidying first would be a change of its own, and undo would revert that.
 [[ $1 == undo ]] && { undo; exit }
@@ -659,7 +949,7 @@ case "$1" in
     [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
     n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
   pick|f) pick ;;
-  complete) complete_items "$2" ;;
+  complete) complete_items "$ccmd" ;;
   edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

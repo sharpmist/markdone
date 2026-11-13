@@ -106,14 +106,15 @@ check "tidy list file" "## Today
 - [x] $today Ticked in an editor
 - [x] $d7 Seven days
 - [x] $today Undated" "$(file)"
-check "archive appended and sorted" "# Archive $y
+check "archive appended and sorted (an old-style archive is moved to Archive/ first)" "# Archive $y
 
 - [x] $y-01-01 Existing
 - [x] $d8 Eight days
-- [x] $d8 Old ticked later" "$(<"$dir/Archive $y.md")"
-check "archive per year" "# Archive 2020
+- [x] $d8 Old ticked later" "$(<"$dir/Archive/Todo $y.md")"
+[[ ! -e "$dir/Archive $y.md" ]]; check "the old-style archive is gone" 0 $?
+check "archive per year, per list" "# Todo archive 2020
 
-- [x] 2020-05-01 Ancient" "$(<"$dir/Archive 2020.md")"
+- [x] 2020-05-01 Ancient" "$(<"$dir/Archive/Todo 2020.md")"
 before=$(file); run; check "second run changes nothing" "$before" "$(file)"
 
 # a failed archive write keeps the item in the list
@@ -123,14 +124,14 @@ fresh "## Today
 ## Done
 - [x] 2020-06-01 Old item
 "
-printf '# Archive 2020\n\n' >"$dir/Archive 2020.md"; chmod a-w "$dir/Archive 2020.md"
+mkdir "$dir/Archive"; printf '# Todo archive 2020\n\n' >"$dir/Archive/Todo 2020.md"; chmod a-w "$dir/Archive/Todo 2020.md"
 before=$(file); run
-[[ $out == *"t: could not write $dir/Archive 2020.md; list not tidied"* ]]
+[[ $out == *"t: could not write $dir/Archive/Todo 2020.md; list not tidied"* ]]
 check "archive write failure: warns" 0 $?
 check "archive write failure: list untouched" "$before" "$(file)"
-check "archive write failure: archive untouched" $'# Archive 2020\n' "$(<"$dir/Archive 2020.md")"$'\n'
-chmod u+w "$dir/Archive 2020.md"
-run; check "archives once writable again" "- [x] 2020-06-01 Old item" "$(grep Old "$dir/Archive 2020.md")"
+check "archive write failure: archive untouched" $'# Todo archive 2020\n' "$(<"$dir/Archive/Todo 2020.md")"$'\n'
+chmod u+w "$dir/Archive/Todo 2020.md"
+run; check "archives once writable again" "- [x] 2020-06-01 Old item" "$(grep Old "$dir/Archive/Todo 2020.md")"
 
 # --- today: move an item from Later to Today ---
 fresh "## Today
@@ -335,13 +336,13 @@ fresh "## Today
 jsonok() { python3 -I -c 'import json,sys; json.load(sys.stdin)' <<<"$1"; }
 run list --json
 check "json: one object per item" '[
-{"n":1,"section":"Today","text":"Say \"hi\" \\ back\u0009slash [PROJ-7](https://jira.example.com/browse/PROJ-7), again [PROJ-7](https://jira.example.com/browse/PROJ-7), and [OPS-1](https://jira.example.com/browse/OPS-1)","jira":["PROJ-7","OPS-1"]},
-{"n":2,"section":"Later","text":"Later one","jira":[]}
+{"list":"Todo","n":1,"section":"Today","text":"Say \"hi\" \\ back\u0009slash [PROJ-7](https://jira.example.com/browse/PROJ-7), again [PROJ-7](https://jira.example.com/browse/PROJ-7), and [OPS-1](https://jira.example.com/browse/OPS-1)","jira":["PROJ-7","OPS-1"]},
+{"list":"Todo","n":2,"section":"Later","text":"Later one","jira":[]}
 ]' "$out"
 jsonok "$out"; check "json: parses as JSON" 0 $?
 run list --later --json
 check "json: --later keeps the numbers" '[
-{"n":2,"section":"Later","text":"Later one","jira":[]}
+{"list":"Todo","n":2,"section":"Later","text":"Later one","jira":[]}
 ]' "$out"
 out=$(TODO_JIRA_KEYS= "$T_BIN" list --today --json); jsonok "$out"
 check "json: no jira keys with linking off" "0|1" "$?|$(grep -c '"jira":\[\]' <<<"$out")"
@@ -470,13 +471,13 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 20 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 26 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
 cmds=$out
 fresh "$EMPTY"
-for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init' -e '^undo$')"}; do
+for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init' -e '^undo$' -e '^@$')"}; do
   run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
 done
 
@@ -501,6 +502,102 @@ export TODO_FILE="/nonexistent/Todo.md"
 run complete add;     check "complete: no items for a command without one, list not read" "0|" "$rc|$out"
 run complete;         check "complete without a command: nothing" "0|" "$rc|$out"
 
+# --- several lists ---
+fresh "$EMPTY"; L1=$dir
+run lists;               check "lists: just the default list, current" "0|* Todo   0 open" "$rc|$out"
+run lists add Work;      check "lists add" "0|Created the list Work; use it with t @Work … or t use Work" "$rc|$out"
+check "lists add writes the three headings" "$EMPTY" "$(<"$L1/Work.md")"$'\n'
+run lists add work;      check "lists add: names are unique, ignoring case" "1|t: there's already a list called Work" "$rc|$out"
+for bad in a/b .hidden @at x.md "Archive 2020" ""; do
+  run lists add "$bad"; check "lists add refuses the name '$bad'" 1 "$rc"
+done
+run lists add "Side projects"; check "lists add: a name with a space" 0 "$rc"
+run @work add "Fix the build"
+check "@list (any case) works on that list" "0|Added 1 (Today): Fix the build" "$rc|$out"
+check "@list: the default list is untouched" "$EMPTY" "$(file)"$'\n'
+run @"Side projects" add -l "Write the post"; check "@list with a space" "Added 1 (Later): Write the post" "$out"
+run lists
+check "lists: counts, sorted, current marked" "  Side projects   1 open
+* Todo            0 open
+  Work            1 open" "$out"
+run @Nope list;          check "@list that doesn't exist" "1|t: no list called 'Nope'; t lists shows them" "$rc|$out"
+run @ list;              check "@ without a name" 1 "$rc"
+run @Work lists;         check "@list with t lists fails" "1|t: t lists works on the lists themselves; it doesn't take @Work" "$rc|$out"
+run @Work init;          check "@list with t init fails" 1 "$rc"
+
+run use work;            check "use switches the current list" "0|Now using Work (1 open)" "$rc|$out"
+check "use writes the name to .current" "Work" "$(<"$L1/.current")"
+run add "Second";        check "after use, commands go to that list" "Added 2 (Today): Second" "$out"
+run list;                check "after use, list shows that list" "  1  Today  Fix the build
+  2  Today  Second" "$out"
+run lists;               check "lists marks the current list" "* Work            2 open" "${${(f)out}[3]}"
+out=$(TODO_LIST=Todo "$T_BIN" list --json 2>&1)
+check "TODO_LIST wins over the current list" "[]" "$out"
+out=$(TODO_LIST=Nope "$T_BIN" list 2>&1); rc=$?
+check "TODO_LIST naming no list fails" "1|t: TODO_LIST is 'Nope', but there's no such list; t lists shows them" "$rc|$out"
+out=$(TODO_LIST=Todo "$T_BIN" use Work 2>&1)
+check "use warns that TODO_LIST still wins" "Now using Work (2 open)
+t: TODO_LIST is set to 'Todo', which still wins where it's set" "$out"
+run use Nope;            check "use with an unknown list" "1|t: no list called 'Nope'; t lists shows them" "$rc|$out"
+run use;                 check "use alone without a terminal fails" 1 "$rc"
+run @Work list --json
+check "list --json names the list" '[
+{"list":"Work","n":1,"section":"Today","text":"Fix the build","jira":[]},
+{"list":"Work","n":2,"section":"Today","text":"Second","jira":[]}
+]' "$out"
+run lists --json
+check "lists --json" '[
+{"name":"Side projects","open":1,"current":false},
+{"name":"Todo","open":0,"current":false},
+{"name":"Work","open":2,"current":true}
+]' "$out"
+out=$(on_tty list); check "list on a terminal names the list when there are several" $'\e[1mWork\e[0m' "${${(f)out}[1]}"
+
+# each list has its own undo, archives and lock
+run @Todo add "Home thing"; run add "Third"; run @Todo undo
+check "undo is per list: Todo's last change undone" "$EMPTY" "$(file)"$'\n'
+run list;                check "undo is per list: Work kept its change" "3" "${#${(f)out}}"
+print -r -- "- [x] $d8 Old work" >>"$L1/Work.md"; run list
+[[ -f "$L1/Archive/Work ${d8[1,4]}.md" ]]; check "archives are per list, in Archive/" 0 $?
+run @Todo list --done --all; check "list --done --all shows only that list's archives" "" "$out"
+run list --done --all;   check "list --done --all includes the list's own archives" "$d8  Old work" "$out"
+
+# the current list deleted by hand: back to the default list, with a warning
+cp "$L1/Work.md" "$L1/work.keep"; rm "$L1/Work.md"
+run list;                check "a vanished current list falls back to the default" "0|t: the current list 'Work' is gone; using Todo (t use picks another)" "$rc|$out"
+mv "$L1/work.keep" "$L1/Work.md"
+run use Todo;            check "use the default list" "Now using Todo (0 open)" "$out"
+[[ ! -e $L1/.current ]]; check "using the default list clears .current" 0 $?
+
+# rename and delete
+run use Work
+run lists rename Work Job; check "lists rename" "0|Renamed the list Work to Job" "$rc|$out"
+[[ -f $L1/Job.md && ! -e $L1/Work.md && -f "$L1/Archive/Job ${d8[1,4]}.md" && ! -e "$L1/Archive/Work ${d8[1,4]}.md" ]]
+check "lists rename moves the file and its archives" 0 $?
+check "lists rename keeps a current list current" "Job" "$(<"$L1/.current")"
+run lists rename Todo Home; check "lists rename refuses the default list" 1 "$rc"
+run lists rename Job "Side projects"; check "lists rename refuses an existing name" "1|t: there's already a list called Side projects" "$rc|$out"
+run lists rm Todo;       check "lists rm refuses the default list" "1|t: Todo is your default list (TODO_FILE); it can't be deleted" "$rc|$out"
+run lists rm Job;        check "lists rm refuses the current list" "1|t: Job is the current list; switch with t use first" "$rc|$out"
+run use Todo
+run lists rm Job;        check "lists rm refuses a list with open items" "1|t: Job has 3 open items; finish or move them first, or use t lists rm --force Job" "$rc|$out"
+run lists rm --force job; check "lists rm --force" "0|Deleted the list Job with its 3 open items; its archives stay in $L1/Archive" "$rc|$out"
+[[ ! -e $L1/Job.md && ! -e $L1/.Job.md.bak && ! -e $L1/.Job.md.lock && -f "$L1/Archive/Job ${d8[1,4]}.md" ]]
+check "lists rm deletes the file and its hidden files, keeps the archives" 0 $?
+run @"Side projects" done post; run lists rm "Side projects"
+check "lists rm of a list without open items" "0|Deleted the list Side projects; its archives stay in $L1/Archive" "$rc|$out"
+run lists rm Nope;       check "lists rm of an unknown list" 1 "$rc"
+
+# Tab completion data
+run lists add Work; run @Work add "Ship it"
+run complete @;          check "complete @: the lists, as @<name>" $'@Todo \t* Todo   0 open\n@Work \t  Work   1 open' "$out"
+run complete use;        check "complete use: the lists" $'Todo \t* Todo   0 open\nWork \t  Work   1 open' "$out"
+run complete lists rm;   check "complete lists rm: the lists" 2 "${#${(f)out}}"
+run complete @Work done; check "complete @list done: that list's items" $'1\t  1  Today  Ship it' "$out"
+run complete @Work;      check "complete @list: the commands" "$(run commands; print -r -- "$out")" "$out"
+run complete lists;      check "complete lists: its subcommands" 'add ""|rm |rename |--json' "${(j:|:)${(@)${(f)out}%%$'\t'*}}"
+run complete @Nope done; check "complete with an unknown list fails" 1 "$rc"
+
 # --- Tab completion widget (shell/t.zsh), driven through a pseudo-terminal ---
 zmodload zsh/zpty zsh/zselect
 fresh "## Today
@@ -512,6 +609,7 @@ fresh "## Today
 
 ## Done
 "
+printf '## Today\n- [ ] Ship it\n\n## Later\n\n## Done\n' >"$dir/Work.md"
 widget_dump=$(mktemp); dirs+=$widget_dump
 zpty -b TT "PATH='${T_BIN:h}':\$PATH PS1='READY> ' zsh -f -i"
 ready() { # wait (max ~5s, never blocks) until the shell shows its prompt again
@@ -553,6 +651,12 @@ tab 't reword '; check "Tab after 't reword ': cursor in the quotes"   't reword
 tab 't  rm  ';   check "Tab after an item command tidies the spacing"  't rm 1|6'      "$got"
 tab 't done 1 '; check "Tab after the item falls back"                 't done 1 X|10' "$got"
 tab 't list ';   check "Tab after a command without items falls back" 't list X|8'    "$got"
+tab 't @';       check "Tab after 't @' picks a list"                 't @Todo |8'    "$got"
+tab 't @Work ';  check "Tab after 't @Work ' picks a command"          't @Work list|12' "$got"
+tab 't @Work done '; check "Tab after 't @Work done ' offers Work's items" 't @Work done 1|14' "$got"
+tab 't use ';    check "Tab after 't use ' picks a list"               't use Todo |11' "$got"
+tab 't lists ';  check "Tab after 't lists ' picks a subcommand"       't lists add ""|13' "$got"
+tab 't @Nope done '; check "Tab after an unknown list falls back"      't @Nope done X|14' "$got"
 setup "export TODO_FILE='$dir/none.md'"
 tab 't done ';   check "Tab with no list falls back"                   't done X|8'    "$got"
 zpty -d TT
@@ -736,7 +840,7 @@ fresh "$EMPTY"
 run add new; print -r -- "- [x] $d8 old" >>"$TODO_FILE"
 run list   # tidy archives "old": the last write
 check "tidy that archived: undo refuses" "1|t: nothing to undo" "$(run undo; print -r -- "$rc|$out")"
-check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive ${d8[1,4]}.md")"
+check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive/Todo ${d8[1,4]}.md")"
 
 # --- the README demo stays true ---
 # Replays every "$ t ..." line of the README's console block and compares the whole transcript.
@@ -949,6 +1053,32 @@ check "plain init in a terminal, vault declined: the default place" "0|Keep the 
 vhome Work Notes
 ttyinit 0 init
 check "plain init in a terminal, several vaults: 0 keeps the default place" "Created $home/todo/Todo.md" "${${(@f)out}[-1]##*\] }"
+
+# --- several lists: t use alone in a terminal, and old archives when another list is named ---
+fresh "$EMPTY"; printf '## Today\n- [ ] Ship it\n\n## Later\n\n## Done\n' >"$dir/Work.md"
+zpty -b TU 'stty -echo; PATH="$fakebin:$PATH" PICK=Work "$T_BIN" use; print -r -- "<rc=$?>"'
+buf=; for i in {1..400}; do while zpty -r -t TU chunk 2>/dev/null; do buf+=$chunk; done; [[ $buf == *'<rc='<->'>'* ]] && break; zselect -t 5; done
+zpty -d TU; buf=${buf//$'\r'/}
+check "use alone in a terminal picks a list with fzf" "Now using Work (1 open)|<rc=0>" "${(j:|:)${(f)buf}}"
+fresh "$EMPTY"; printf '## Today\n\n## Later\n\n## Done\n' >"$dir/Work.md"
+printf '# Archive 2020\n\n- [x] 2020-05-01 Ancient\n' >"$dir/Archive 2020.md"
+run @Work list
+[[ -f "$dir/Archive/Todo 2020.md" && ! -e "$dir/Archive 2020.md" ]]
+check "old archives move to the default list's, also when another list is named" 0 $?
+run list --done --all; check "moved archives still show with list --done --all" "2020-05-01  Ancient" "$out"
+
+# names are text, never patterns
+fresh "$EMPTY"; run lists add Work; run lists add 'W*'
+run @'w*' add star;      check "a name with * matches only that list" "Added 1 (Today): star" "$out"
+run @Work list;          check "the other list is untouched" "" "$out"
+# rename keeps the list current by t use's choice, even while TODO_LIST says otherwise
+run use Work; out=$(TODO_LIST=Todo "$T_BIN" lists rename Work Job 2>&1)
+check "rename with TODO_LIST set keeps .current right" "Job" "$(<"$dir/.current")"
+# another list doesn't need the default list's lock (only to move old archives)
+hold 1500
+out=$("$T_BIN" @Job add quick 2>&1); rc=$?
+check "a named list works while the default list is locked" "0|Added 1 (Today): quick" "$rc|$out"
+kill -9 $holder; wait $holder 2>/dev/null
 
 print "$pass passed, $fail failed"
 (( fail == 0 ))
