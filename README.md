@@ -11,6 +11,7 @@ app such as Obsidian: tick an item there and `t` picks it up.
 t [list]                  list open items, numbered          (aliases: ls, l)
 t list --today | --later  list only Today's or Later's open items (same numbers as t list)
 t list --done [--all]     list done items, newest first; --all includes the archives
+t list --json             open items as JSON (also with --today or --later)
 t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
 t done <item>             mark an item done                  (alias: d)
 t today <item>            move an item from Later to Today   (alias: promote)
@@ -28,8 +29,21 @@ t commands                list commands with examples, tab-separated (used by Ta
 `<item>` is either a number from `t list` or text that matches exactly one open item: any part of
 it, ignoring case, such as `t done "logout fix"` or `t done PROJ-123`. If the text matches several
 items, `t` lists them and changes nothing. A reference made only of digits is always a number.
+
 For `t reword`, the first argument names the item and the rest is the new text, so quote an item
 given as text with spaces: `t reword "logout" "Retest logout fix"`.
+
+`t list --json` prints the open items as a JSON array, one object per line, with the same numbers
+as `t list`:
+
+```json
+[
+{"n":1,"section":"Today","text":"Retest logout fix [PROJ-123](https://your-company.atlassian.net/browse/PROJ-123)","jira":["PROJ-123"]}
+]
+```
+
+`text` is the item as stored in the file (Markdown); `jira` lists the Jira keys in it (empty when
+Jira linking is off).
 
 Commands that read the list first tidy it: items ticked in an editor get today's date and move to
 `## Done`, and Done items older than 7 days move to `Archive <year>.md` next to the list.
@@ -161,10 +175,11 @@ Add something like this to your agent's instructions (e.g. `~/.claude/CLAUDE.md`
 # Personal todo list
 My todo list is managed with the `t` command. Run `t help` for all commands.
 - Add an item: `t add "<text>"` (Today) or `t add --later "<text>"` (Later). One line.
-- Remove an item: `t rm "<text>"`. Change its text: `t reword "<text>" "<new text>"`. Undo the last change: `t undo`.
-- List open items: `t list`. Mark one done by a unique part of its text: `t done "<text>"`. If
-  that matches several items, `t` lists them; use more of the text. Numbers from `t list` also
-  work, but only until the list changes.
+- List open items: `t list`, or `t list --json` to parse them.
+- Name an item by a unique part of its text, not by number: numbers shift when the list changes.
+  If the text matches several items, `t` lists them; use more of the text.
+- Mark one done: `t done "<text>"`. Remove one: `t rm "<text>"`. Change one:
+  `t reword "<text>" "<new text>"`. Undo your last change: `t undo`.
 - Never edit the todo file or its archives directly; `t` keeps the format and archives done items.
 - Only touch the list when I ask.
 ```

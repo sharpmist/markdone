@@ -16,6 +16,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t`, `t list`                        | `ls`, `l`        | `[t:list]`                      |
 | `t list --today`, `t list --later`   |                  | `[t:list]` with a section name  |
 | `t list --done [--all]`              |                  | `[t:list_done]`                 |
+| `t list --json`                     |                  | `[t:list_json]`                 |
 | `t add [--later] <text>`             | `a`, `-l`        | `[t:add]`, `[t:insert_item]`    |
 | `t done <item>`                      | `d`              | `[t:item]`, `[t:finish]`        |
 | `t today <item>`                     | `promote`        | `[t:item]`, `[t:move]`          |
@@ -44,6 +45,7 @@ Internal helpers:
 - `[t:save]`: rewrites the list from a temp file.
 - `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
 - `[t:lock]`: takes the list's lock on `$lockfile`.
+- `[t:list_json]`: open items as JSON, built with perl so strings are escaped properly.
 - `[t:item]`: resolves an `<item>` argument (number or text) to an item number.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
@@ -55,6 +57,10 @@ Output contracts:
 - `t list`: one line per open item, `<n>  <section> <text>` (`printf "%3d  %-6s %s\n"`).
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
+- `t list --json`: a JSON array in `t list` order, one object per line:
+  `{"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}`. `text` is the item as stored
+  (Markdown). `jira` holds the configured Jira keys in it, once each, and is empty when linking is
+  off. `[]` when there are no open items. Never rendered for a terminal.
 - Success messages: `Added <n> (<section>): <text>`, `Done: <text>`, `Removed: <text>`, `Reworded <n> (<section>): <text>`,
   `Moved to <section> as <n>: <text>`, `Created <file>`,
   `Undid the last change; run t undo again to redo it`.
@@ -90,9 +96,9 @@ Output contracts:
   then dies with `nothing to undo`.
 - **Startup.** `zmodload zsh/datetime zsh/system` must succeed, or `t` exits 1 before doing
   anything. `zsystem flock -i` needs zsh 5.8 or newer.
-- **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
-  `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
-  list everything.
+- **`list` options.** Only `--today`, `--later`, `--done`, `--all` and `--json` are accepted.
+  `--all` needs `--done`; `--done` can't be combined with `--today`, `--later` or `--json`;
+  `--today --later` together list everything.
 - **Archive before rewriting.** `[t:tidy]` appends to every `Archive <year>.md` first and calls
   `save` only if all of those writes worked; otherwise it warns and leaves the list untidied. A
   new archive file starts with a `# Archive <year>` heading; items are appended sorted, one file

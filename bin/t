@@ -24,6 +24,7 @@ Usage:
   t [list]                  list open items, numbered          (aliases: ls, l)
   t list --today | --later  list only Today's or Later's open items (same numbers as t list)
   t list --done [--all]     list done items, newest first; --all includes the archives
+  t list --json             open items as JSON (also with --today or --later)
   t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
   t done <item>             mark an item done                  (alias: d)
   t today <item>            move an item from Later to Today   (alias: promote)
@@ -122,6 +123,7 @@ commands() {
     'list'              'list'                 'List open items, numbered'                'list' \
     'list --today'      'list --today'         "List only Today's open items"             'list --today' \
     'list --later'      'list --later'         "List only Later's open items"             'list --later' \
+    'list --json'       'list --json'          'List open items as JSON (for scripts)'    'list --json' \
     'list --done'       'list --done'          'List items done in the last 7 days'       'list --done' \
     'list --done --all' 'list --done --all'    'List all done items, incl. archives'      'list --done --all' \
     'add ""'            'add "<text>"'         'Add an item to Today'                     'add "Retest logout fix PROJ-123"' \
@@ -191,6 +193,21 @@ tidy() {
 # items are shown, keeping the same numbers so they work with done/today/later.
 list() {
   awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) printf "%3d  %-6s %s\n", n, sec, substr($0,7)}' "$f" | render
+}
+
+# list_json [section]: open items as a JSON array, one object per line, in t list order:
+# {"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}. text is the item as stored (Markdown).
+# jira lists the configured Jira keys in it, in order, once each; empty when linking is off. Never
+# rendered for a terminal, so the output is always plain JSON.
+list_json() {
+  awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) print n "\t" sec "\t" substr($0,7)}' "$f" |
+    T_KEYS="$JIRA_KEYS" perl -ne '
+      BEGIN { $k = join "|", map quotemeta, split " ", $ENV{T_KEYS} }
+      sub js { my $v = shift; $v =~ s/(["\\])/\\$1/g; $v =~ s/([\x00-\x1f])/sprintf "\\u%04x", ord $1/ge; "\"$v\"" }
+      chomp; my ($n, $s, $t) = split /\t/, $_, 3; my %seen;
+      my @j = $k eq "" ? () : grep { !$seen{$_}++ } $t =~ /(?<![\w\/-])((?:$k)-\d+)(?![\w-])/g;
+      push @o, sprintf q{{"n":%d,"section":%s,"text":%s,"jira":[%s]}}, $n, js($s), js($t), join ",", map { js($_) } @j;
+      END { print @o ? "[\n" . join(",\n", @o) . "\n]\n" : "[]\n" }'
 }
 
 # list_done <all>: done items as "DATE  text", newest first. Runs after tidy, so every item has a date.
@@ -387,22 +404,26 @@ tidy
 case "$1" in
   ""|list|ls|l)
     (( $# )) && shift
-    show_done=0; show_all=0; show_today=0; show_later=0
+    show_done=0; show_all=0; show_today=0; show_later=0; show_json=0
     for opt in "$@"; do
       case $opt in
         --done) show_done=1 ;;
         --all) show_all=1 ;;
         --today) show_today=1 ;;
         --later) show_later=1 ;;
-        *) die "unknown option '$opt' for list (expected --today, --later, --done, --all)" ;;
+        --json) show_json=1 ;;
+        *) die "unknown option '$opt' for list (expected --today, --later, --done, --all, --json)" ;;
       esac
     done
     (( show_all && !show_done )) && die "--all only works together with --done"
     (( show_done && (show_today || show_later) )) && die "--today and --later list open items; they don't combine with --done"
+    (( show_done && show_json )) && die "--json lists open items; it doesn't combine with --done"
+    sec=
+    (( show_today && !show_later )) && sec=Today
+    (( show_later && !show_today )) && sec=Later
     if (( show_done )); then list_done $show_all
-    elif (( show_today && !show_later )); then list Today
-    elif (( show_later && !show_today )); then list Later
-    else list
+    elif (( show_json )); then list_json "$sec"
+    else list "$sec"
     fi ;;
   add|a)
     shift

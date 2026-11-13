@@ -286,6 +286,36 @@ run reword 9 x;     check "reword with no such item fails" "1|t: no open item 9"
 run reword 1 "$(printf 'two\nlines')"; check "reword to several lines fails" "1|t: item must be a single line" "$rc|$out"
 check "file unchanged after failed rewords" "$before" "$(file)"
 
+# --- list --json ---
+fresh "$EMPTY"
+run list --json;   check "json: empty list" "0|[]" "$rc|$out"
+fresh "## Today
+- [ ] Say \"hi\" \\ back"$'\t'"slash PROJ-7, again PROJ-7, and OPS-1
+
+## Later
+- [ ] Later one
+
+## Done
+- [x] $today done
+"
+jsonok() { python3 -I -c 'import json,sys; json.load(sys.stdin)' <<<"$1"; }
+run list --json
+check "json: one object per item" '[
+{"n":1,"section":"Today","text":"Say \"hi\" \\ back\u0009slash [PROJ-7](https://jira.example.com/browse/PROJ-7), again [PROJ-7](https://jira.example.com/browse/PROJ-7), and [OPS-1](https://jira.example.com/browse/OPS-1)","jira":["PROJ-7","OPS-1"]},
+{"n":2,"section":"Later","text":"Later one","jira":[]}
+]' "$out"
+jsonok "$out"; check "json: parses as JSON" 0 $?
+run list --later --json
+check "json: --later keeps the numbers" '[
+{"n":2,"section":"Later","text":"Later one","jira":[]}
+]' "$out"
+out=$(TODO_JIRA_KEYS= "$T_BIN" list --today --json); jsonok "$out"
+check "json: no jira keys with linking off" "0|1" "$?|$(grep -c '"jira":\[\]' <<<"$out")"
+out=$(python3 -I -c 'import pty,sys; pty.spawn(sys.argv[1:])' "$T_BIN" list --json </dev/null)
+[[ $out == "["* && $out != *$'\e'* ]]; check "json: plain even on a terminal" 0 $?
+run list --done --json
+check "json: not with --done" "1|t: --json lists open items; it doesn't combine with --done" "$rc|$out"
+
 # --- listing done items ---
 fresh "## Today
 - [ ] Open one
@@ -406,7 +436,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 17 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 18 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
