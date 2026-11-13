@@ -63,6 +63,9 @@ run add "$(printf 'two\nlines')"; check "multi-line add fails" 1 "$rc"
 check "file unchanged after errors" "$before" "$(file)"
 run help;  check "help exits 0" 0 "$rc"; [[ $out == *"t add [--later] <text>"* ]]; check "help text" 0 $?
 run --help; check "--help exits 0" 0 "$rc"
+export TODO_FILE="/nonexistent/Todo.md"   # version must work without a list
+run version;   [[ $out == "t "<->.<->.<-> ]]; check "version: t <major>.<minor>.<patch>, exit 0" "0|0" "$?|$rc"
+v=$out; run --version; check "--version" "$v" "$out"
 
 # --- tidy: dating, moving and archiving ---
 fresh "## Today
@@ -436,7 +439,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 18 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 19 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
@@ -588,6 +591,15 @@ run add new; print -r -- "- [x] $d8 old" >>"$TODO_FILE"
 run list   # tidy archives "old": the last write
 check "tidy that archived: undo refuses" "1|t: nothing to undo" "$(run undo; print -r -- "$rc|$out")"
 check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive ${d8[1,4]}.md")"
+
+# --- the README demo stays true ---
+# Replays every "$ t ..." line of the README's console block and compares the whole transcript.
+demo=$(awk '/^```console$/{on=1; next} on && /^```$/{exit} on' "${T_BIN:h:h}/README.md")
+fresh "$EMPTY"
+replay=$(for cmd in ${(f)"$(grep '^\$ t ' <<<"$demo")"}; do
+  print -r -- "$cmd"; TODO_JIRA_KEYS= eval "\"\$T_BIN\" ${cmd#\$ t }" 2>&1
+done)
+check "README demo matches real output" "$demo" "$replay"
 
 # --- edge cases ---
 fresh $'## Today\n- [x] orphan\n'

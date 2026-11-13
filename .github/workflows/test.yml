@@ -3,6 +3,7 @@ name: test
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -45,3 +46,12 @@ jobs:
           python3 --version
       - name: Run tests
         run: test/run.zsh
+      - name: Check the tag matches t --version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          got=$(ZDOTDIR="$RUNNER_TEMP" bin/t --version)
+          want="t ${GITHUB_REF_NAME#v}"
+          if [ "$got" != "$want" ]; then
+            echo "tag $GITHUB_REF_NAME doesn't match bin/t: got '$got', want '$want'" >&2
+            exit 1
+          fi
