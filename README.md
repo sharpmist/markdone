@@ -1,9 +1,57 @@
 # markdone
 
-`t` is a small command for a personal todo list kept in one Markdown file. It's built to be used from
-the terminal and by AI agents (Claude Code, Codex, opencode, …), which can be told to use `t` instead
-of editing the file. The file is plain Markdown with checkboxes, so it also works well inside a notes
-app such as Obsidian: tick an item there and `t` picks it up.
+A personal todo list kept in one plain Markdown file, with a small command, `t`, that you and your
+AI agents can both use safely.
+
+- **One Markdown file.** `## Today`, `## Later` and `## Done` sections with checkboxes. Open it in
+  Obsidian or any editor; tick an item there and `t` picks it up.
+- **Made for AI agents too.** Agents (Claude Code, Codex, opencode, …) name items by a part of
+  their text instead of numbers that shift, can read `t list --json`, and never need to edit the
+  file.
+- **Safe to share.** Runs from you and your agents take turns, every change is backed up first,
+  and `t undo` reverses the last one.
+- **Small.** One zsh script using awk and perl, for macOS and Linux. fzf is optional.
+
+## A quick look
+
+```console
+$ t add "Fix the flaky login test"
+Added 1 (Today): Fix the flaky login test
+$ t add "Fix a typo in the README"
+Added 2 (Today): Fix a typo in the README
+$ t add --later "Clean up old branches"
+Added 3 (Later): Clean up old branches
+$ t list
+  1  Today  Fix the flaky login test
+  2  Today  Fix a typo in the README
+  3  Later  Clean up old branches
+$ t done fix
+t: 'fix' matches 2 open items; use more of the text, or the number:
+  1  Today  Fix the flaky login test
+  2  Today  Fix a typo in the README
+$ t done flaky
+Done: Fix the flaky login test
+$ t later typo
+Moved to Later as 2: Fix a typo in the README
+$ t undo
+Undid the last change; run t undo again to redo it
+$ t list
+  1  Today  Fix a typo in the README
+  2  Later  Clean up old branches
+```
+
+The list itself stays plain Markdown:
+
+```markdown
+## Today
+- [ ] Fix a typo in the README
+
+## Later
+- [ ] Clean up old branches
+
+## Done
+- [x] 2026-11-13 Fix the flaky login test
+```
 
 ## Commands
 

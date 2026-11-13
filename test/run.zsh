@@ -592,6 +592,15 @@ run list   # tidy archives "old": the last write
 check "tidy that archived: undo refuses" "1|t: nothing to undo" "$(run undo; print -r -- "$rc|$out")"
 check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive ${d8[1,4]}.md")"
 
+# --- the README demo stays true ---
+# Replays every "$ t ..." line of the README's console block and compares the whole transcript.
+demo=$(awk '/^```console$/{on=1; next} on && /^```$/{exit} on' "${T_BIN:h:h}/README.md")
+fresh "$EMPTY"
+replay=$(for cmd in ${(f)"$(grep '^\$ t ' <<<"$demo")"}; do
+  print -r -- "$cmd"; TODO_JIRA_KEYS= eval "\"\$T_BIN\" ${cmd#\$ t }" 2>&1
+done)
+check "README demo matches real output" "$demo" "$replay"
+
 # --- edge cases ---
 fresh $'## Today\n- [x] orphan\n'
 run
