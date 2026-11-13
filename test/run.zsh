@@ -232,6 +232,25 @@ run done;                check "done without an item fails" "1|t: usage: t done 
 run today login;         check "today: text naming a Today item" "1|t: item 1 is already in Today" "$rc|$out"
 check "file unchanged after failed references" "$before" "$(file)"
 
+# Text is matched against what t list shows in a terminal: links count by their text, not their URL.
+fresh "## Today
+- [ ] Fix logout PROJ-7
+- [ ] Read [the guide](https://docs.example.com/guide) on https://example.org/faq
+- [ ] Ask about [local notes](notes.md)
+
+## Done
+"
+run done jira.example;   check "a Jira link's URL doesn't match" "1|t: no open item matches 'jira.example'" "$rc|$out"
+run done docs.example;   check "a link's URL doesn't match" "1|t: no open item matches 'docs.example'" "$rc|$out"
+run done browse;         check "no match in any link's URL" "1|t: no open item matches 'browse'" "$rc|$out"
+run done "logout proj-7"; check "text across a link boundary matches" "Done: Fix logout $p7" "$out"
+run undo
+run done "the guide on";  check "a link matches by its text" 0 "$rc"
+run undo
+run done example.org;     check "a bare URL is shown, so it matches" 0 "$rc"
+run undo
+run done notes.md;        check "a non-web link is shown as is, so it matches" 0 "$rc"
+
 # --- rm ---
 fresh "## Today
 - [ ] keep
@@ -544,6 +563,59 @@ fresh "$EMPTY"; chmod a-w "${TODO_FILE:h}"
 run; check "unwritable directory: can't lock" "1|t: could not create the lock file $(lock_of)" "$rc|$out"
 chmod u+w "${TODO_FILE:h}"
 run help; [[ ! -e $(lock_of) ]]; check "help doesn't lock" 0 $?
+
+# --- pick ---
+# A fake fzf: runs $PICK_DURING (as if another run happened while fzf was open), then prints the
+# first input line containing $PICK, or exits 130 like a cancelled fzf when $PICK is empty.
+fakebin=$(mktemp -d); dirs+=$fakebin
+cat >"$fakebin/fzf" <<'EOS'
+#!/bin/sh
+input=$(cat)
+[ -n "$PICK_DURING" ] && eval "$PICK_DURING" >/dev/null 2>&1
+[ -n "$PICK" ] || exit 130
+printf '%s\n' "$input" | grep -m1 -F -- "$PICK"
+EOS
+chmod +x "$fakebin/fzf"
+run_pick() { # <text of the line to pick> [command to run while fzf is open]
+  out=$(PATH="$fakebin:$PATH" T_BIN="$T_BIN" T_LOCK="$(lock_of)" PICK="$1" PICK_DURING="$2" \
+    "$T_BIN" pick 2>&1); rc=$?
+}
+ABC=$'## Today\n- [ ] A\n- [ ] B\n\n## Later\n- [ ] C\n\n## Done\n'
+fresh "$ABC"
+run_pick B; check "pick marks the chosen item done" "0|Done: B" "$rc|$out"
+
+fresh "$ABC"
+run_pick C 'zsh -fc '\''zmodload zsh/system; zsystem flock -t 0 -f fd "$1" && echo free || echo held'\'' x "$T_LOCK" >"$T_LOCK.state"; "$T_BIN" rm A'
+check "pick: the lock is free while fzf is open" free "$(<"$(lock_of).state")"
+check "pick: numbers shifted while fzf was open" "0|Done: C" "$rc|$out"
+check "pick: the other run's change is kept" $'## Today\n- [ ] B\n\n## Later\n\n## Done\n'"- [x] $today C" "$(file)"
+
+fresh "$ABC"
+run_pick C '"$T_BIN" rm C'
+check "pick: item removed while fzf was open" \
+  "1|t: 'C' is no longer an open item; it was changed while fzf was open, so nothing is done" "$rc|$out"
+check "pick: nothing done when the item is gone" $'## Today\n- [ ] A\n- [ ] B\n\n## Later\n\n## Done' "$(file)"
+
+fresh $'## Today\n- [ ] same\n\n## Later\n- [ ] same\n\n## Done\n'
+run_pick "Later  same"
+check "pick: of two items with the same text, the chosen one" \
+  $'0|Done: same|## Today\n- [ ] same\n\n## Later\n\n## Done\n'"- [x] $today same" "$rc|$out|$(file)"
+
+fresh $'## Today\n- [ ] same\n- [ ] x\n\n## Later\n- [ ] same\n\n## Done\n'
+before=$(file)
+run_pick "Later  same" '"$T_BIN" rm x'
+check "pick: no longer clear which item was meant" "1|t: 'same' now matches 2 open items; run t pick again" "$rc|$out"
+
+fresh "$ABC"
+run_pick ""; check "pick: cancelling fzf changes nothing" "130|$ABC" "$rc|$(file)"$'\n'
+fresh "$EMPTY"
+run_pick B; check "pick with no open items" "1|t: no open items to pick" "$rc|$out"
+
+nofzf=$(mktemp -d); dirs+=$nofzf
+for c in zsh awk perl date cat mktemp cmp cut sort grep touch rm; do ln -s "${commands[$c]}" "$nofzf/$c"; done
+fresh "$ABC"
+out=$(PATH="$nofzf" "$T_BIN" pick 2>&1); rc=$?
+check "pick without fzf" "1|t: t pick needs fzf (https://github.com/junegunn/fzf)" "$rc|$out"
 
 # --- backup ---
 bak_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.bak"; }

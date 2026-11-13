@@ -6,7 +6,7 @@
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
 # The release version. A pushed git tag v<version> must match it (checked in CI).
-T_VERSION=0.1.0
+T_VERSION=0.1.1
 
 zmodload zsh/datetime zsh/system || exit 1
 
@@ -260,7 +260,8 @@ add() {
 
 # item <command> <ref...>: print the number of the open item that ref names, for t <command>. ref is
 # a number from t list, or text matching exactly one open item: a case-insensitive substring of the
-# item as stored, so a linked Jira key matches too. Text is matched literally, not as a pattern.
+# item as a terminal shows it, with each [text](http...) link reduced to its text, so a linked Jira
+# key matches but its URL doesn't. Text is matched literally, not as a pattern.
 # Dies when nothing or more than one item matches, listing the matches. Called as
 # n=$(item ...) || exit, so die only ends the subshell; the lock is held all along, so the number
 # can't change before it's used.
@@ -270,8 +271,18 @@ item() {
   if [[ $ref == <-> ]]; then print -r -- "$ref"; return 0; fi
   matches=$(T_REF="$ref" awk '
     BEGIN { r = tolower(ENVIRON["T_REF"]) }
+    # shown: s with [text](http...) links reduced to their text, as render() shows them.
+    function shown(s,   o, l) {
+      o = ""
+      while (match(s, /\[[^]]+\]\(https?:\/\/[^) \t]+\)/)) {
+        l = substr(s, RSTART, RLENGTH)
+        o = o substr(s, 1, RSTART - 1) substr(l, 2, index(l, "](") - 2)
+        s = substr(s, RSTART + RLENGTH)
+      }
+      return o s
+    }
     /^## / { sec = substr($0, 4) }
-    /^- \[ \] / { n++; if (index(tolower(substr($0, 7)), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
+    /^- \[ \] / { n++; if (index(tolower(shown(substr($0, 7))), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
   ' "$f") || die "could not read $f"
   [[ -n $matches ]] || die "no open item matches '$ref'"
   [[ $matches != *$'\n'* ]] ||
@@ -376,6 +387,38 @@ lock() {
   (( rc == 0 )) || die "could not lock $lockfile"
 }
 
+# pick: choose an open item with fzf and mark it done. fzf can stay open for as long as you like,
+# so the lock is released while it is, and other runs (an agent's t add) aren't kept waiting. Then
+# it locks and tidies again and finds the chosen item by its stored text, since numbers may have
+# shifted meanwhile. If several open items have that text, the one at the chosen number wins; if
+# it's no longer clear which one was meant, or the item is gone, nothing is changed.
+pick() {
+  local shown snap choice rc n text found
+  (( $+commands[fzf] )) || die "t pick needs fzf (https://github.com/junegunn/fzf)"
+  shown=$(list) || die "could not read $f"
+  [[ -n $shown ]] || die "no open items to pick"
+  snap=$(<"$f") || die "could not read $f"
+  zsystem flock -u $lockfd || die "could not unlock $lockfile"
+  choice=$(print -r -- "$shown" | fzf --prompt='done> '); rc=$?
+  (( rc == 0 )) || exit $rc
+  n=${${=choice}[1]}
+  [[ $n == <-> ]] || die "could not read the item number from fzf's output: $choice"
+  text=$(print -r -- "$snap" | awk -v N="$n" '/^- \[ \] / && ++c == N { print substr($0, 7) }')
+  [[ -n $text ]] || die "could not find item $n in the list as fzf showed it"
+  lock
+  tidy
+  # Prints the number to finish, or "0 <count>" when there's none or more than one candidate.
+  found=$(T_TEXT="$text" awk -v N="$n" '
+    /^- \[ \] / { c++; if (substr($0, 7) == ENVIRON["T_TEXT"]) { m++; at = c; if (c == N) same = 1 } }
+    END { if (same) print N; else if (m == 1) print at; else print 0, m + 0 }' "$f") ||
+    die "could not read $f"
+  case $found in
+    "0 0") die "'$text' is no longer an open item; it was changed while fzf was open, so nothing is done" ;;
+    0\ *)  die "'$text' now matches ${found#0 } open items; run t pick again" ;;
+  esac
+  finish "$found"
+}
+
 # undo: put back the list as it was before t's last write. The current list becomes the backup,
 # so a second undo redoes. Refuses when the list was changed since that write (by hand, in an
 # editor or a sync), since restoring the backup would throw that change away.
@@ -441,9 +484,7 @@ case "$1" in
   reword)
     [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
     n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
-  pick|f)
-    pick=$(list | fzf --prompt='done> ') || exit
-    finish "$(awk '{print $1}' <<<"$pick")" ;;
+  pick|f) pick ;;
   edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

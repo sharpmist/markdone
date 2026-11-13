@@ -23,7 +23,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t later <item>`                     | `demote`         | `[t:item]`, `[t:move]`          |
 | `t rm <item>`                        | `remove`         | `[t:item]`, `[t:remove]`        |
 | `t reword <item> <text>`             |                  | `[t:item]`, `[t:reword]`        |
-| `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
+| `t pick`                             | `f`              | `[t:pick]`, `[t:finish]`        |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
 | `t init`                             |                  | `[t:init]`                      |
@@ -50,6 +50,7 @@ Internal helpers:
 - `[t:lock]`: takes the list's lock on `$lockfile`.
 - `[t:list_json]`: open items as JSON, built with perl so strings are escaped properly.
 - `[t:item]`: resolves an `<item>` argument (number or text) to an item number.
+- `[t:pick]`: `t pick`; shows `t list` in fzf with the lock released, then finds the choice again.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -58,7 +59,7 @@ Output contracts:
 - `t commands`: one line per command, `<text to insert after "t ">\t<display text>`.
   [`../shell/t.zsh`](../shell/EGM.md) parses it.
 - `t list`: one line per open item, `<n>  <section> <text>` (`printf "%3d  %-6s %s\n"`).
-  `t pick` takes the item number from the first field of the chosen line.
+  `[t:pick]` takes the item number from the first field of the line chosen in fzf.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
 - `t list --json`: a JSON array in `t list` order, one object per line:
   `{"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}`. `text` is the item as stored
@@ -81,7 +82,8 @@ Output contracts:
 - **Unlocking.** The kernel releases the lock when the process ends, however it ends (`die`, a
   signal, `kill -9`), so there are no stale locks. Child processes never hold it. `exec` closes the
   lock's descriptor (`zsystem flock` without `-e`), so the editor `t edit` starts doesn't hold it.
-  `t pick` holds the lock while fzf is open.
+  `[t:pick]` is the one exception to holding the lock until exit: it releases it
+  (`zsystem flock -u`) while fzf is open, then locks and tidies again before changing anything.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
   list command, including `edit`, sees a tidied list. `help`, `version`, `commands` and `init`
   exit before that; all but `init` never touch the list.
@@ -115,9 +117,11 @@ Output contracts:
   below `days_ago 7`. If that date can't be computed, nothing is archived.
 - **Item references.** `[t:item]` turns `<item>` into a number. Only digits: used as the number
   as is. Anything else: the arguments joined with spaces, matched case-insensitively and literally
-  (awk `index`, not a regex) against each open item's stored text, so Markdown link URLs count
-  too. Exactly one match is required; with none or several, it dies, listing the matches, and the
-  list is unchanged. It runs under the lock, so the number can't change before it's used.
+  (awk `index`, not a regex) against each open item's text as `[t:render]` shows it in a
+  terminal: `[text](http...)` links count by their text, so a linked Jira key matches but no URL
+  inside a link does. Exactly one match is required; with none or several, it dies, listing the
+  matches, and the list is unchanged. It runs under the lock, so the number can't change before
+  it's used.
 - **Item numbers.** `n` counts `- [ ] ` lines from the top of the file, across all sections.
   `[t:list]`, `[t:finish]` and `[t:move]` all count the same way; a section filter in `list` keeps
   the numbers.
@@ -132,6 +136,11 @@ Output contracts:
   removes and re-inserts the item in a single write.
 - **Insert position.** `[t:insert_item]` appends at the end of the section, before its trailing
   blank lines, and fails when the section heading is missing.
+- **Picking.** `[t:pick]` dies when fzf isn't installed or there are no open items, and exits
+  with fzf's status when nothing is chosen. After relocking it finds the chosen item by its exact
+  stored text: the item at the chosen number if its text is unchanged, else the only open item
+  with that text. If there is none, or several and none at the chosen number, it dies and changes
+  nothing.
 - **Done items.** `[t:finish]` writes `- [x] YYYY-MM-DD <text>` directly under `## Done` and fails
   when item `n` or the heading doesn't exist.
 - **Jira linking is all or nothing.** `[t:check_jira]` turns linking off, with a warning, when a

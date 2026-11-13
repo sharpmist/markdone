@@ -79,7 +79,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   nothing if that copy fails; after a crash mid-write the backup still holds the list.
   `t undo` restores that backup; see the Undo invariant in `bin/EGM.md`.
 - **Locking:** every command that reads the list runs under its lock (`lock`, called before
-  `tidy`) and holds it until the process ends. Don't read or write the list before that.
+  `tidy`) and holds it until the process ends. Don't read or write the list before that. The one
+  exception is `pick`, which releases it while fzf is open and locks again before changing anything.
 - **Archiving:** append to the archives first, and rewrite the list only if every archive write
   worked. A crash or failed write in between can then duplicate an archived item, but never lose
   one.
