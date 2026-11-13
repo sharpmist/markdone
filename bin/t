@@ -6,7 +6,7 @@
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
 # The release version. A pushed git tag v<version> must match it (checked in CI).
-T_VERSION=0.1.2
+T_VERSION=0.2.0
 
 zmodload zsh/datetime zsh/system || exit 1
 
