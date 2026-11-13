@@ -1,0 +1,88 @@
+#!/usr/bin/env zsh
+# install - set up t from this clone: link bin/t into a directory on PATH and turn on Tab
+# completion in ~/.zshrc. Run it again at any time; it only does what isn't done yet.
+#
+#   ./install [--bin <dir>] [--no-zshrc]   install (default dir: ~/.local/bin)
+#   ./install --uninstall [--bin <dir>]    undo both
+#
+# It never creates or touches the todo list itself; run `t init` for that.
+
+repo=${0:A:h}
+bin=$HOME/.local/bin
+rc=${ZDOTDIR:-$HOME}/.zshrc
+mode=install edit_rc=1
+src="source ${(qq):-$repo/shell/t.zsh}"
+mark="# markdone: Tab completion for t (remove with ./install --uninstall)"
+
+warn() { print -r -- "install: $*" >&2; }
+die() { warn "$@"; exit 1; }
+
+while (( $# )); do
+  case $1 in
+    --bin) [[ -n $2 ]] || die "--bin needs a directory"; bin=${2:a}; shift 2 ;;
+    --no-zshrc) edit_rc=0; shift ;;
+    --uninstall) mode=uninstall; shift ;;
+    -h|--help) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    *) die "unknown option '$1' (see ./install --help)" ;;
+  esac
+done
+link=$bin/t
+
+if [[ $mode == uninstall ]]; then
+  if [[ -L $link && ${link:A} == $repo/bin/t ]]; then
+    rm -f -- "$link" || die "could not remove $link"
+    print -r -- "Removed $link"
+  else
+    print -r -- "No link to this t at $link; left alone"
+  fi
+  if [[ -f $rc ]] && grep -qxF -- "$mark" "$rc"; then
+    tmp=$(mktemp) || die "could not create a temp file"
+    # Drop our comment, the source line right after it and the blank lines before it; nothing else.
+    # cat >"$rc" rewrites it in place, so a ~/.zshrc that is a symlink stays one.
+    awk -v mark="$mark" '
+      $0 == "" { blanks = blanks "\n"; next }
+      $0 == mark { blanks = ""; skip = 1; next }
+      skip && /shell\/t\.zsh/ { skip = 0; next }
+      { printf "%s", blanks; blanks = ""; skip = 0; print }
+      END { printf "%s", blanks }' "$rc" >"$tmp" && cat "$tmp" >"$rc" ||
+      { rm -f "$tmp"; die "could not update $rc"; }
+    rm -f "$tmp"
+    print -r -- "Removed Tab completion from $rc"
+  fi
+  exit 0
+fi
+
+# 1. The command: a symlink, so a git pull in this clone updates it.
+mkdir -p -- "$bin" || die "could not create $bin"
+if [[ -L $link && ${link:A} == $repo/bin/t ]]; then
+  print -r -- "t is already linked: $link"
+elif [[ -e $link || -L $link ]]; then
+  die "$link already exists and isn't this t; remove it, or choose another directory with --bin"
+else
+  ln -s -- "$repo/bin/t" "$link" || die "could not link $link"
+  print -r -- "Linked $link -> $repo/bin/t"
+fi
+[[ :$PATH: == *:$bin:* ]] ||
+  warn "$bin isn't on your PATH; add it, e.g. in ~/.zshenv: export PATH=\"$bin:\$PATH\""
+
+# 2. Tab completion, after fzf's own key bindings (which come earlier in a typical ~/.zshrc).
+if (( ! edit_rc )); then
+  :
+elif [[ -f $rc ]] && grep -qF -- "$repo/shell/t.zsh" "$rc"; then
+  print -r -- "Tab completion is already on in $rc"
+elif (( ! $+commands[fzf] )); then
+  warn "fzf isn't installed, so Tab completion is left off; install fzf and run ./install again"
+else
+  print -r -- $'\n'"$mark"$'\n'"$src" >>"$rc" || die "could not update $rc"
+  print -r -- "Turned on Tab completion: added to the end of $rc:"$'\n'"  $src"
+  grep -vF -- "$repo/shell/t.zsh" "$rc" | grep -q fzf ||
+    warn "$rc doesn't seem to load fzf's key bindings; Tab completion works best after: source <(fzf --zsh)"
+fi
+
+# 3. Anything else called t in your shell would hide this one.
+if [[ -f $rc ]]; then
+  clash=$(grep -nE '^[[:space:]]*(alias[[:space:]]+(-g[[:space:]]+)?t=|(function[[:space:]]+)?t[[:space:]]*\(\))' "$rc")
+  [[ -n $clash ]] && warn "$rc defines its own t, which hides this one; rename or remove it:"$'\n'"$clash"
+fi
+
+print -r -- "Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)."

@@ -766,5 +766,59 @@ ro=$(mktemp -d); dirs+=$ro; chmod a-w "$ro"; export TODO_FILE="$ro/sub/Todo.md"
 run init;  check "init fails when the directory can't be created" 1 "$rc"
 [[ $out == *"t: could not create the directory $ro/sub" ]]; check "init failure names the directory" 0 $?
 
+# --- ./install ---
+# Always with a throwaway home: ./install edits ~/.zshrc and links into ~/.local/bin.
+inst() { out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$home/.local/bin:$fakebin:$PATH" "${T_BIN:h:h}/install" "$@" 2>&1); rc=$?; }
+repo=${T_BIN:h:h}
+home=$(mktemp -d); dirs+=$home
+print -r -- 'source <(fzf --zsh)' >"$home/.zshrc"
+inst
+check "install: links t and turns on Tab completion" "0|Linked $home/.local/bin/t -> $repo/bin/t
+Turned on Tab completion: added to the end of $home/.zshrc:
+  source '$repo/shell/t.zsh'
+Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)." "$rc|$out"
+[[ ${${:-$home/.local/bin/t}:A} == $repo/bin/t ]]; check "install: the link points at this clone's t" 0 $?
+check "install: ~/.zshrc gets one marked source line" "source <(fzf --zsh)
+
+# markdone: Tab completion for t (remove with ./install --uninstall)
+source '$repo/shell/t.zsh'" "$(<"$home/.zshrc")"
+before=$(<"$home/.zshrc"); inst
+check "install again: nothing to do" "0|t is already linked: $home/.local/bin/t
+Tab completion is already on in $home/.zshrc
+Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)." "$rc|$out"
+check "install again: ~/.zshrc unchanged" "$before" "$(<"$home/.zshrc")"
+inst --uninstall
+check "uninstall removes the link and the line" "0|Removed $home/.local/bin/t
+Removed Tab completion from $home/.zshrc" "$rc|$out"
+check "uninstall leaves the rest of ~/.zshrc as it was" "source <(fzf --zsh)" "$(<"$home/.zshrc")"
+inst --uninstall; check "uninstall again: nothing to do" "0|No link to this t at $home/.local/bin/t; left alone" "$rc|$out"
+
+home=$(mktemp -d); dirs+=$home
+print -r -- $'alias t="tmux"\nsource <(fzf --zsh)' >"$home/.zshrc"
+inst --no-zshrc
+check "install warns about another t in ~/.zshrc" "0|install: $home/.zshrc defines its own t, which hides this one; rename or remove it:
+1:alias t=\"tmux\"" "$rc|${(F)${(@f)out}[2,3]}"
+check "--no-zshrc leaves ~/.zshrc alone" $'alias t="tmux"\nsource <(fzf --zsh)' "$(<"$home/.zshrc")"
+
+home=$(mktemp -d); dirs+=$home; mkdir -p "$home/.local/bin"; print x >"$home/.local/bin/t"
+inst; check "install refuses to replace another t" \
+  "1|install: $home/.local/bin/t already exists and isn't this t; remove it, or choose another directory with --bin" "$rc|$out"
+inst --uninstall; check "uninstall leaves another t alone" "x" "$(<"$home/.local/bin/t")"
+
+home=$(mktemp -d); dirs+=$home
+inst --bin "$home/elsewhere"
+check "install --bin off PATH: links there, warns" "0|Linked $home/elsewhere/t -> $repo/bin/t|install: $home/elsewhere isn't on your PATH; add it, e.g. in ~/.zshenv: export PATH=\"$home/elsewhere:\$PATH\"" \
+  "$rc|${(j:|:)${(@f)out}[1,2]}"
+[[ $out == *"doesn't seem to load fzf's key bindings"* ]]; check "install warns when ~/.zshrc doesn't load fzf" 0 $?
+
+home=$(mktemp -d); dirs+=$home
+for c in mkdir ln sed; do ln -sf "${commands[$c]}" "$nofzf/$c"; done
+out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$home/.local/bin:$nofzf" "$repo/install" 2>&1); rc=$?
+check "install without fzf: Tab completion left off" "0|install: fzf isn't installed, so Tab completion is left off; install fzf and run ./install again" "$rc|${${(f)out}[2]}"
+[[ ! -e $home/.zshrc ]]; check "install without fzf: no ~/.zshrc written" 0 $?
+
+inst --help; [[ $rc == 0 && $out == *"./install --uninstall"* ]]; check "install --help" 0 $?
+inst --bogus; check "install: unknown option fails" "1|install: unknown option '--bogus' (see ./install --help)" "$rc|$out"
+
 print "$pass passed, $fail failed"
 (( fail == 0 ))

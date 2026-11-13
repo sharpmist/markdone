@@ -109,14 +109,26 @@ Commands that read the list first tidy it: items ticked in an editor get today's
 
 ## Install
 
-Clone the repo anywhere and link `bin/t` into a directory on your `PATH`:
+Clone the repo anywhere and run `./install`:
 
 ```sh
 git clone https://github.com/sharpmist/markdone.git
 cd markdone
-mkdir -p ~/.local/bin
-ln -s "$PWD/bin/t" ~/.local/bin/t   # make sure ~/.local/bin is on your PATH
+./install
 ```
+
+`./install` does two things, and says what it did:
+
+- It links `bin/t` into `~/.local/bin` (`--bin <dir>` picks another directory), and warns if that
+  directory isn't on your `PATH`. It's a link, so a `git pull` in the clone updates `t`.
+- If fzf is installed, it turns on [Tab completion](#tab-completion-zsh) by adding a `source` line
+  to the end of `~/.zshrc` (`--no-zshrc` skips this).
+
+It also warns when your `~/.zshrc` defines its own `t`, such as `alias t="tmux"`, which would hide
+this one. It never replaces an existing `t`, and running it again only does what isn't done yet.
+`./install --uninstall` removes the link and the `~/.zshrc` line. It doesn't touch your list.
+
+Then open a new terminal and create your list with `t init` (see below for choosing where it lives).
 
 ### Configure
 
@@ -216,7 +228,8 @@ instead and puts its number on the command line. `t today ` offers only Later's 
 `t later ` only Today's; for `t reword` the cursor lands between quotes for the new text. Typing
 part of the item first (`t done fix` Tab) pre-fills the search. Anywhere else Tab works as before.
 
-Enable it in `~/.zshrc`, after fzf's own key bindings (adjust the path to where you cloned the repo):
+`./install` turns it on. To do it by hand instead, add this to `~/.zshrc`, after fzf's own key
+bindings (adjust the path to where you cloned the repo):
 
 ```sh
 source <(fzf --zsh)

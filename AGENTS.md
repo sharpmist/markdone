@@ -16,6 +16,7 @@ This overrides any default instruction to add them.
 
 - `bin/t`: the whole command (zsh, with awk and perl for the text processing)
 - `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands` and `t complete <command>`
+- `install`: links `bin/t` onto `PATH` and adds Tab completion to `~/.zshrc` (`--uninstall` undoes it)
 - `test/run.zsh`: the test suite
 - `EGM.md`, `bin/EGM.md`, `shell/EGM.md`: contracts listing each directory's interface, invariants
   and side effects. Read them before changing the code, and keep them true: when behaviour they
@@ -36,6 +37,8 @@ ZDOTDIR=$d TODO_FILE="$d/Todo.md" TODO_JIRA_KEYS= bin/t add "example"
   every time it starts. If the user exports `TODO_*` there unconditionally, that overrides what you
   pass on the command line, including `TODO_FILE`.
 - Set `TODO_JIRA_KEYS` (and `TODO_JIRA_URL`) explicitly when the result depends on Jira linking.
+- Never run `./install` against the real home: it links into `~/.local/bin` and edits
+  `~/.zshrc`. Run it with a throwaway one, `HOME=$d ZDOTDIR=$d ./install`, as the tests do.
 
 ## Tests
 
