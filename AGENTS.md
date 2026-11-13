@@ -15,7 +15,7 @@ This overrides any default instruction to add them.
 `t` is a zsh command for a todo list kept in one Markdown file. See `README.md` for usage and setup.
 
 - `bin/t`: the whole command (zsh, with awk and perl for the text processing)
-- `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands`
+- `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands` and `t complete <command>`
 - `test/run.zsh`: the test suite
 - `EGM.md`, `bin/EGM.md`, `shell/EGM.md`: contracts listing each directory's interface, invariants
   and side effects. Read them before changing the code, and keep them true: when behaviour they
@@ -68,6 +68,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
     "commands: one tab-separated line per command")
   - the `case` dispatch at the bottom of `bin/t`, or the first `case` block above it for commands
     that must work without a list (like `help` and `commands`)
+  - `ITEM_CMDS` in `bin/t` (and `complete_items()` if it needs a section filter) when the command
+    takes an `<item>`, so Tab completion offers items after it
   - the Commands section of `README.md`
   - `bin/EGM.md` (command table, invariants, side effects), and `shell/EGM.md` or the root
     `EGM.md` when the change reaches them

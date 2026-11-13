@@ -43,6 +43,7 @@ Usage:
   t help                    show this help                     (-h, --help)
   t version                 show the version                   (--version)
   t commands                list commands with examples, tab-separated (used by Tab completion)
+  t complete <command>      list the items <command> takes, tab-separated (used by Tab completion)
 
 <item> is a number from t list, or text that matches exactly one open item
 (case-insensitive, any part of it), e.g. t done "logout fix".
@@ -74,6 +75,19 @@ render() {
     cat
   fi
 }
+
+# AWK_SHOWN: awk function shown(s): s with each [text](http...) link reduced to its text, as
+# render() shows it in a terminal. Put it in front of an awk program that uses it.
+AWK_SHOWN='
+  function shown(s,   o, l) {
+    o = ""
+    while (match(s, /\[[^]]+\]\(https?:\/\/[^) \t]+\)/)) {
+      l = substr(s, RSTART, RLENGTH)
+      o = o substr(s, 1, RSTART - 1) substr(l, 2, index(l, "](") - 2)
+      s = substr(s, RSTART + RLENGTH)
+    }
+    return o s
+  }'
 
 warn() { print -r -- "t: $*" >&2; }
 die() { warn "$@"; exit 1; }
@@ -275,18 +289,8 @@ item() {
   local cmd=$1 ref matches; shift; ref="$*"
   [[ -n $ref ]] || die "usage: t $cmd <item>"
   if [[ $ref == <-> ]]; then print -r -- "$ref"; return 0; fi
-  matches=$(T_REF="$ref" awk '
+  matches=$(T_REF="$ref" awk "$AWK_SHOWN"'
     BEGIN { r = tolower(ENVIRON["T_REF"]) }
-    # shown: s with [text](http...) links reduced to their text, as render() shows them.
-    function shown(s,   o, l) {
-      o = ""
-      while (match(s, /\[[^]]+\]\(https?:\/\/[^) \t]+\)/)) {
-        l = substr(s, RSTART, RLENGTH)
-        o = o substr(s, 1, RSTART - 1) substr(l, 2, index(l, "](") - 2)
-        s = substr(s, RSTART + RLENGTH)
-      }
-      return o s
-    }
     /^## / { sec = substr($0, 4) }
     /^- \[ \] / { n++; if (index(tolower(shown(substr($0, 7))), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
   ' "$f") || die "could not read $f"
@@ -393,6 +397,27 @@ lock() {
   (( rc == 0 )) || die "could not lock $lockfile"
 }
 
+# ITEM_CMDS: the commands that take an <item>, with their aliases.
+ITEM_CMDS=(done d today promote later demote rm remove reword)
+
+# complete_items <command>: the open items <command> can take, for Tab completion (shell/t.zsh). One
+# line per item, "<text to insert after 't <command> '>\t<the t list line>", with links shown as
+# their text. today offers Later's items and later Today's; for reword the insert ends in "" so the
+# cursor lands between the quotes for the new text. For a command that takes no item, t exits
+# before reading the list and prints nothing (first case block).
+complete_items() {
+  local only= suffix=
+  case $1 in
+    today|promote) only=Later ;;
+    later|demote)  only=Today ;;
+    reword)        suffix=' ""' ;;
+  esac
+  T_SUFFIX="$suffix" awk -v only="$only" "$AWK_SHOWN"'
+    /^## / { sec = substr($0, 4) }
+    /^- \[ \] / { n++; if (only == "" || sec == only) printf "%d%s\t%3d  %-6s %s\n", n, ENVIRON["T_SUFFIX"], n, sec, shown(substr($0, 7)) }
+  ' "$f" || die "could not read $f"
+}
+
 # pick: choose an open item with fzf and mark it done. fzf can stay open for as long as you like,
 # so the lock is released while it is, and other runs (an agent's t add) aren't kept waiting. Then
 # it locks and tidies again and finds the chosen item by its stored text, since numbers may have
@@ -448,6 +473,7 @@ case "$1" in
   -h|--help|help) usage; exit 0 ;;
   --version|version) print -r -- "t $T_VERSION"; exit 0 ;;
   commands) commands; exit 0 ;;
+  complete) (( ${ITEM_CMDS[(Ie)$2]} )) || exit 0 ;;   # no item to offer: don't touch the list
   init) init; exit 0 ;;
 esac
 
@@ -493,6 +519,7 @@ case "$1" in
     [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
     n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
   pick|f) pick ;;
+  complete) complete_items "$2" ;;
   edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac
