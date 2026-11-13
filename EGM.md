@@ -36,7 +36,8 @@ The only coupling between the two components is the output of `t commands` and
 - **Never lose an item.** Archives are appended before the list is rewritten, so a failure in
   between can duplicate an archived item but not drop one.
 - **Configuration only through environment variables.** `TODO_FILE`, `TODO_JIRA_KEYS` and
-  `TODO_JIRA_URL`; nothing environment-specific is hardcoded.
+  `TODO_JIRA_URL`; nothing environment-specific is hardcoded. `t init` can write `TODO_FILE` to
+  `~/.zshenv` for you, but `t` reads no config file of its own.
 - **`t commands` and `t complete` are the completion contract.** Their line format
   (`<insert text>\t<display text>`) is shared by `bin/t` and `shell/t.zsh`.
 - **Portability.** zsh, POSIX awk and perl on macOS and Linux; no GNU- or BSD-only tool flags.
@@ -54,6 +55,8 @@ The only coupling between the two components is the output of `t commands` and
   write, kept in `.<list name>.sum`.
 - A hidden, empty lock file, `.<list name>.lock`, sits next to the list; `t` holds a lock on it
   while it runs.
+- `t init` may add a marked `TODO_FILE` line to `~/.zshenv`, after asking in a terminal, and reads
+  Obsidian's list of vaults.
 - No network access.
 
 ## System Verification
