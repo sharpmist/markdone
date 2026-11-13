@@ -30,6 +30,7 @@ Usage:
   t later <n>               move item n from Today to Later    (alias: demote)
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
+  t undo                    undo the last change; run it again to redo
   t init                    create the list with its three headings (never overwrites)
   t help                    show this help                     (-h, --help)
   t commands                list commands with examples, tab-separated (used by Tab completion)
@@ -99,8 +100,12 @@ save() {
   if ! (umask 077; cat -- "$f" >"$bak"); then
     rm -f "$@"; die "could not write the backup $bak; list not changed"
   fi
-  cat "$1" >"$f" && return 0
-  rm -f "$@"; die "could not write $f (the previous version is in $bak)"
+  if ! cat "$1" >"$f"; then
+    rm -f "$@"; die "could not write $f (the previous version is in $bak)"
+  fi
+  # Same mtime on both marks the backup as the version just before this write; undo checks it.
+  touch -r "$f" "$bak" || warn "could not set the time of $bak; t undo won't undo this change"
+  return 0
 }
 
 # commands: one line per command, "<text to insert after t>\t<description and example>".
@@ -120,6 +125,7 @@ commands() {
     'later '            'later <n>'            'Move item n from Today to Later'          'later 1' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
+    'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
     'init'              'init'                 'Create the list (never overwrites)'       'init' \
     'help'              'help'                 'Show help'                                'help'
   do
@@ -162,7 +168,11 @@ tidy() {
         ok=0; break
       fi
     done
-    if (( ok )); then save "$tmp" "$arch" "$lnk"
+    if (( ok )); then
+      save "$tmp" "$arch" "$lnk"
+      # Undoing would put the archived items back in the list, and the next tidy would archive
+      # them a second time. So a tidy that archived anything can't be undone.
+      [[ -s $arch ]] && rm -f -- "$bak"
     else warn "could not write $af; list not tidied"
     fi
   fi
@@ -292,6 +302,22 @@ unlock() {
 trap unlock EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
+# undo: put back the list as it was before t's last write. The current list becomes the backup,
+# so a second undo redoes. Refuses when the list was changed since that write (by hand, in an
+# editor or a sync), since restoring the backup would throw that change away.
+undo() {
+  local tmp
+  [[ -f $bak ]] || die "nothing to undo"
+  if [[ $f -nt $bak || $bak -nt $f ]]; then
+    die "the list was changed since t last wrote it; not undoing (t's previous version is in $bak)"
+  fi
+  tmp=$(mktemp) || die "could not create a temp file; nothing undone"
+  if ! cat -- "$bak" >"$tmp"; then rm -f "$tmp"; die "could not read $bak; nothing undone"; fi
+  save "$tmp"
+  rm -f "$tmp"
+  print -r -- "Undid the last change; run t undo again to redo it"
+}
+
 # Commands that don't need the list.
 case "$1" in
   -h|--help|help) usage; exit 0 ;;
@@ -301,6 +327,8 @@ esac
 
 [[ -f $f ]] || die "$f not found; create it with 't init', or set TODO_FILE to your list"
 lock
+# undo runs before tidy: tidying first would be a change of its own, and undo would revert that.
+[[ $1 == undo ]] && { undo; exit }
 check_jira
 tidy
 

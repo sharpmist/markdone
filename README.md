@@ -17,6 +17,7 @@ t today <n>               move item n from Later to Today    (alias: promote)
 t later <n>               move item n from Today to Later    (alias: demote)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
+t undo                    undo the last change; run it again to redo
 t init                    create the list with its three headings (never overwrites)
 t help                    show this help                     (-h, --help)
 t commands                list commands with examples, tab-separated (used by Tab completion)
@@ -87,7 +88,10 @@ seconds, so no change is lost. A lock left by a `t` that was killed is taken ove
 the list is locked and no `t` is running, remove that directory.
 
 Before every change, `t` copies the list to a hidden `.Todo.md.bak` next to it, so a crash while
-writing can't lose it.
+writing can't lose it. `t undo` puts that copy back, undoing the last change `t` made; running it
+again redoes the change. It refuses when the list was changed since `t` last wrote it (in an editor
+or by a sync), so it never throws such a change away. A change that archived done items can't be
+undone, since that would archive them twice.
 
 `t edit` opens the list in `$EDITOR`, or `nvim` if `$EDITOR` isn't set. `$EDITOR` may include
 arguments, e.g. `EDITOR="code -w"`.

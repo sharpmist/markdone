@@ -22,6 +22,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t later <n>`                        | `demote`         | `[t:move]`                      |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
+| `t undo`                             |                  | `[t:undo]`                      |
 | `t init`                             |                  | `[t:init]`                      |
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
 | `t commands`                         |                  | `[t:commands]`                  |
@@ -39,6 +40,7 @@ Internal helpers:
 - `[t:linkify]`: turns bare Jira keys into Markdown links; `linkify all` processes every line.
 - `[t:render]`: shows Markdown links as OSC 8 hyperlinks when stdout is a terminal.
 - `[t:save]`: rewrites the list from a temp file.
+- `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
 - `[t:lock]`, `[t:unlock]`: take and release the list's lock, `$lockdir`.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
@@ -51,7 +53,8 @@ Output contracts:
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
 - Success messages: `Added <n> (<section>): <text>`, `Done: <text>`,
-  `Moved to <section> as <n>: <text>`, `Created <file>`.
+  `Moved to <section> as <n>: <text>`, `Created <file>`,
+  `Undid the last change; run t undo again to redo it`.
 
 ## Invariants
 
@@ -77,6 +80,12 @@ Output contracts:
   writing when that fails. It then writes with `cat "$1" >"$f"`, so the file itself (symlink,
   permissions) is kept. The write is not atomic; after a crash during it, `$bak` holds the list as
   it was.
+- **Undo.** `[t:save]` gives `$bak` the list's mtime after each write (`touch -r`). `[t:undo]`
+  restores `$bak` only when the mtimes still match, so a change made outside `t` since then is
+  never thrown away; it restores through `[t:save]`, so a second undo redoes. It runs under the
+  lock but before `check_jira` and `tidy`, which would otherwise make a change of their own. A
+  `[t:tidy]` that archived items deletes `$bak`, because restoring would archive them twice; undo
+  then dies with `nothing to undo`.
 - **Startup.** `zmodload zsh/datetime zsh/zselect` must succeed, or `t` exits 1 before doing anything.
 - **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
   `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
@@ -114,7 +123,8 @@ Output contracts:
 
 - Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
-- Overwrites `$bak` with the current list before every write (`[t:save]`).
+- Overwrites `$bak` with the current list before every write and sets its mtime to the list's
+  (`[t:save]`); deletes it after a tidy that archived (`[t:tidy]`). `t undo` restores it.
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
 - Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.

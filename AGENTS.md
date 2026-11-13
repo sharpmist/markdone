@@ -77,6 +77,7 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   (`cat "$tmp" >"$f"`), so symlinks and permissions survive; `mv` would replace the file. It isn't
   atomic, so `save` first copies the list to a hidden backup next to it (`$bak`) and writes
   nothing if that copy fails; after a crash mid-write the backup still holds the list.
+  `t undo` restores that backup; see the Undo invariant in `bin/EGM.md`.
 - **Locking:** every command that reads the list runs under its lock (`lock`, called before
   `tidy`). Don't read or write the list before that, and call `unlock` before `exec`.
 - **Archiving:** append to the archives first, and rewrite the list only if every archive write
