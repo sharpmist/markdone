@@ -73,6 +73,7 @@ t init                    create the list with its three headings (never overwri
 t help                    show this help                     (-h, --help)
 t version                 show the version                   (--version)
 t commands                list commands with examples, tab-separated (used by Tab completion)
+t complete <command>      list the items <command> takes, tab-separated (used by Tab completion)
 ```
 
 `<item>` is either a number from `t list` or text that matches exactly one open item: any part of
@@ -208,7 +209,12 @@ with `/`, `t` warns and links nothing, so broken links never end up in the list.
 
 Type `t ` and press Tab to pick a command in fzf; each line shows a description and an example.
 The choice is put on the command line (for `add`, with the cursor between the quotes). Typing part
-of a command first (`t ad` Tab) pre-fills the search. Anywhere else Tab works as before.
+of a command first (`t ad` Tab) pre-fills the search.
+
+After a command that takes an item (`t done `, `t rm `, `t reword `, …), Tab picks the item in fzf
+instead and puts its number on the command line. `t today ` offers only Later's items and
+`t later ` only Today's; for `t reword` the cursor lands between quotes for the new text. Typing
+part of the item first (`t done fix` Tab) pre-fills the search. Anywhere else Tab works as before.
 
 Enable it in `~/.zshrc`, after fzf's own key bindings (adjust the path to where you cloned the repo):
 
@@ -217,8 +223,8 @@ source <(fzf --zsh)
 source /path/to/markdone/shell/t.zsh
 ```
 
-The commands shown come from `t commands`, so `shell/t.zsh` doesn't need changing when commands are
-added.
+The commands shown come from `t commands`, and the items from `t complete <command>`, so
+`shell/t.zsh` doesn't need changing when commands are added.
 
 ## Using it from AI agents
 

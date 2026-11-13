@@ -468,8 +468,38 @@ for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '
   run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
 done
 
+# --- t complete (used by Tab completion for items) ---
+fresh "## Today
+- [ ] Fix login
+- [ ] Fix logout PROJ-7
+
+## Later
+- [ ] Clean up
+
+## Done
+"
+run complete done
+check "complete done: every open item, links shown as their text" \
+  $'0|1\t  1  Today  Fix login\n2\t  2  Today  Fix logout PROJ-7\n3\t  3  Later  Clean up' "$rc|$out"
+run complete today;   check "complete today: Later's items"  $'3\t  3  Later  Clean up' "$out"
+run complete demote;  check "complete demote (later): Today's items" $'1\t  1  Today  Fix login\n2\t  2  Today  Fix logout PROJ-7' "$out"
+run complete reword;  check "complete reword: cursor goes between quotes" $'1 ""\t  1  Today  Fix login' "${out%%$'\n'*}"
+run complete d;       check "complete: aliases work" "$(run complete done; print -r -- "$out")" "$out"
+export TODO_FILE="/nonexistent/Todo.md"
+run complete add;     check "complete: no items for a command without one, list not read" "0|" "$rc|$out"
+run complete;         check "complete without a command: nothing" "0|" "$rc|$out"
+
 # --- Tab completion widget (shell/t.zsh), driven through a pseudo-terminal ---
 zmodload zsh/zpty zsh/zselect
+fresh "## Today
+- [ ] Fix login
+- [ ] Fix logout
+
+## Later
+- [ ] Clean up
+
+## Done
+"
 widget_dump=$(mktemp); dirs+=$widget_dump
 zpty -b TT "PATH='${T_BIN:h}':\$PATH PS1='READY> ' zsh -f -i"
 ready() { # wait (max ~5s, never blocks) until the shell shows its prompt again
@@ -503,6 +533,16 @@ tab 't la';      check "Tab after 't la' inserts 'later '"            't later |
 tab 'echo hi';   check "Tab elsewhere falls back to the old binding"  'echo hiX|8'    "$got"
 tab 't add foo'; check "Tab after a full t command falls back"        't add fooX|10' "$got"
 tab 't';         check "Tab on bare 't' falls back"                   'tX|2'          "$got"
+tab 't done ';   check "Tab after 't done ' inserts an item's number" 't done 1|8'    "$got"
+tab 't d 2';     check "Tab after an alias and a partial item"         't d 2|5'       "$got"
+tab 't today ';  check "Tab after 't today ' offers Later's items"     't today 3|9'   "$got"
+tab 't later ';  check "Tab after 't later ' offers Today's items"     't later 1|9'   "$got"
+tab 't reword '; check "Tab after 't reword ': cursor in the quotes"   't reword 1 ""|12' "$got"
+tab 't  rm  ';   check "Tab after an item command tidies the spacing"  't rm 1|6'      "$got"
+tab 't done 1 '; check "Tab after the item falls back"                 't done 1 X|10' "$got"
+tab 't list ';   check "Tab after a command without items falls back" 't list X|8'    "$got"
+setup "export TODO_FILE='$dir/none.md'"
+tab 't done ';   check "Tab with no list falls back"                   't done X|8'    "$got"
 zpty -d TT
 
 # --- configuration from ~/.zshenv, in the form README.md recommends ---

@@ -4,8 +4,8 @@
 
 `t` is the whole todo command: one zsh script that reads and rewrites a single Markdown list
 (`## Today`, `## Later`, `## Done`), using awk and perl for the text processing. Every command
-except `help`, `version`, `commands` and `init` first checks that the list exists, validates
-the Jira settings and tidies the list, then runs.
+except `help`, `version`, `commands`, `init` and `complete` for a command without items first
+checks that the list exists, validates the Jira settings and tidies the list, then runs.
 
 ## Interface
 
@@ -30,6 +30,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
 | `t version`                          | `--version`      | `print`                         |
 | `t commands`                         |                  | `[t:commands]`                  |
+| `t complete <command>`               |                  | `[t:complete_items]`            |
 
 Environment variables read at startup:
 
@@ -50,6 +51,9 @@ Internal helpers:
 - `[t:lock]`: takes the list's lock on `$lockfile`.
 - `[t:list_json]`: open items as JSON, built with perl so strings are escaped properly.
 - `[t:item]`: resolves an `<item>` argument (number or text) to an item number.
+- `[t:ITEM_CMDS]`: the commands that take an `<item>`, with their aliases.
+- `[t:AWK_SHOWN]`: awk function `shown(s)`, an item's text with `[text](http...)` links reduced to
+  their text, as `[t:render]` shows it; used by `[t:item]` and `[t:complete_items]`.
 - `[t:pick]`: `t pick`; shows `t list` in fzf with the lock released, then finds the choice again.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
@@ -58,6 +62,10 @@ Output contracts:
 
 - `t commands`: one line per command, `<text to insert after "t ">\t<display text>`.
   [`../shell/t.zsh`](../shell/EGM.md) parses it.
+- `t complete <command>`: one line per open item `<command>` can take,
+  `<text to insert after "t <command> ">\t<t list line>`, links shown as their text. The insert
+  is the item number, followed by ` ""` for `reword`. `today`/`promote` offer only Later's items,
+  `later`/`demote` only Today's. Nothing, with status 0, for a command not in `[t:ITEM_CMDS]`.
 - `t list`: one line per open item, `<n>  <section> <text>` (`printf "%3d  %-6s %s\n"`).
   `[t:pick]` takes the item number from the first field of the line chosen in fzf.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
@@ -72,7 +80,7 @@ Output contracts:
 ## Invariants
 
 - **The list must exist.** Only `t init` creates it: every command except `help`, `version`,
-  `commands` and `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
+  `commands`, `init` and `complete` for a command without items dies when `$f` is not a file (`[t:f]` check before `check_jira`).
 - **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
   already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
 - **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
@@ -85,8 +93,9 @@ Output contracts:
   `[t:pick]` is the one exception to holding the lock until exit: it releases it
   (`zsystem flock -u`) while fzf is open, then locks and tidies again before changing anything.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
-  list command, including `edit`, sees a tidied list. `help`, `version`, `commands` and `init`
-  exit before that; all but `init` never touch the list.
+  list command, including `edit`, sees a tidied list. `help`, `version`, `commands`, `init` and
+  `complete` for a command not in `[t:ITEM_CMDS]` exit before that; all but `init` never touch
+  the list. `complete` for an item command reads, locks and tidies the list like `t list`.
 - **Writes go through `save`.** `[t:add]`, `[t:finish]`, `[t:move]` and `[t:tidy]` build the result
   in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` first copies
   the list to `$bak` (`.<list name>.bak` next to it, created with `umask 077`) and dies without

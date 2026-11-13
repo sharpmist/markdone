@@ -7,15 +7,16 @@ sections `## Today`, `## Later` and `## Done`. The command is a single script; a
 file adds fzf-based Tab completion on top of it. Usage and setup are in [`README.md`](./README.md);
 rules for changing the code are in [`AGENTS.md`](./AGENTS.md).
 
-The only coupling between the two components is the output of `t commands`: `bin/t` prints one
-tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
+The only coupling between the two components is the output of `t commands` and
+`t complete <command>`: `bin/t` prints one tab-separated line per command or per item, and
+`shell/t.zsh` shows those lines in fzf.
 
 ## Subdirectories & System Boundaries
 
 - bin: [`./bin/EGM.md`](./bin/EGM.md) - `t`, the whole command: reads, tidies and rewrites the
   list, archives old Done items, links Jira keys.
 - shell: [`./shell/EGM.md`](./shell/EGM.md) - `t.zsh`, Tab completion for interactive zsh, fed by
-  `t commands`.
+  `t commands` and `t complete <command>`.
 - test: `run.zsh`, the test suite (no contract file; test-only directory).
 
 ## Global Invariants
@@ -32,7 +33,7 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
   between can duplicate an archived item but not drop one.
 - **Configuration only through environment variables.** `TODO_FILE`, `TODO_JIRA_KEYS` and
   `TODO_JIRA_URL`; nothing environment-specific is hardcoded.
-- **`t commands` is the completion contract.** Its line format
+- **`t commands` and `t complete` are the completion contract.** Their line format
   (`<insert text>\t<display text>`) is shared by `bin/t` and `shell/t.zsh`.
 - **Portability.** zsh, POSIX awk and perl on macOS and Linux; no GNU- or BSD-only tool flags.
 - **Tests never touch a real list.** `test/run.zsh` sets `TODO_FILE` to throwaway files and
