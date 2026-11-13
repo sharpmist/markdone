@@ -9,8 +9,9 @@ zmodload zsh/datetime zsh/zselect || exit 1
 
 f="${TODO_FILE:-$HOME/todo/Todo.md}"
 
-# The lock is a directory next to the list (hidden, so notes apps ignore it); see lock().
+# The lock and the backup sit next to the list, hidden so notes apps ignore them; see lock() and save().
 lockdir="${f:h}/.${f:t}.lock" locked=0
+bak="${f:h}/.${f:t}.bak"
 
 # Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
 # text. check_jira validates both before the list is read.
@@ -91,10 +92,15 @@ check_jira() {
 }
 
 # save <tmp> [more temp files]: rewrite the list with <tmp> in place (keeps the file itself, so
-# symlinks and permissions survive; not atomic). On failure removes the temp files and exits.
+# symlinks and permissions survive; not atomic). First copies the current list to $bak, so a crash
+# during the write can't lose it; if that copy fails, the list isn't written. On failure removes
+# the temp files and exits.
 save() {
+  if ! (umask 077; cat -- "$f" >"$bak"); then
+    rm -f "$@"; die "could not write the backup $bak; list not changed"
+  fi
   cat "$1" >"$f" && return 0
-  rm -f "$@"; die "could not write $f"
+  rm -f "$@"; die "could not write $f (the previous version is in $bak)"
 }
 
 # commands: one line per command, "<text to insert after t>\t<description and example>".

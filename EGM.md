@@ -42,6 +42,8 @@ tab-separated line per command, and `shell/t.zsh` shows those lines in fzf.
 - The list file at `$TODO_FILE` (default `~/todo/Todo.md`) is rewritten in place.
 - `Archive <year>.md` files are created and appended to in the list's directory.
 - Sourcing `shell/t.zsh` rebinds Tab in the interactive zsh session.
+- A hidden backup, `.<list name>.bak`, next to the list holds the list as it was before `t`'s last
+  write.
 - A hidden lock directory, `.<list name>.lock`, exists next to the list while `t` runs.
 - No network access.
 

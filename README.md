@@ -86,6 +86,9 @@ after your list file). Runs that start meanwhile, from you or an AI agent, wait 
 seconds, so no change is lost. A lock left by a `t` that was killed is taken over. If `t` reports
 the list is locked and no `t` is running, remove that directory.
 
+Before every change, `t` copies the list to a hidden `.Todo.md.bak` next to it, so a crash while
+writing can't lose it.
+
 `t edit` opens the list in `$EDITOR`, or `nvim` if `$EDITOR` isn't set. `$EDITOR` may include
 arguments, e.g. `EDITOR="code -w"`.
 

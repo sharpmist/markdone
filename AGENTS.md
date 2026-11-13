@@ -75,7 +75,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
 - **Writing the list:** build the result in a temp file, check that every step producing it
   succeeded, then rewrite the list with `save "$tmp"`. `save` rewrites the file in place
   (`cat "$tmp" >"$f"`), so symlinks and permissions survive; `mv` would replace the file. It isn't
-  atomic: a crash during the write can leave the list partly written.
+  atomic, so `save` first copies the list to a hidden backup next to it (`$bak`) and writes
+  nothing if that copy fails; after a crash mid-write the backup still holds the list.
 - **Locking:** every command that reads the list runs under its lock (`lock`, called before
   `tidy`). Don't read or write the list before that, and call `unlock` before `exec`.
 - **Archiving:** append to the archives first, and rewrite the list only if every archive write

@@ -413,6 +413,20 @@ run; check "unwritable directory: can't lock" "1|t: could not create the lock $(
 chmod u+w "${TODO_FILE:h}"
 run help; [[ ! -e $(lock_of) ]]; check "help doesn't lock" 0 $?
 
+# --- backup ---
+bak_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.bak"; }
+fresh "$EMPTY"
+run list; [[ ! -e $(bak_of) ]]; check "no backup when nothing is written" 0 $?
+run add one; check "backup holds the list before the write" "$EMPTY" "$(cat "$(bak_of)")"$'\n'
+before=$(file); run add two
+check "backup follows each write" "$before" "$(cat "$(bak_of)")"
+[[ $(ls -l "$(bak_of)") == -rw-------* ]]; check "backup is private to the owner" 0 $?
+before=$(file); chmod a-w "$(bak_of)"; run add three
+check "backup fails: nothing written" "1|t: could not write the backup $(bak_of); list not changed" \
+  "$rc|${out##*$'\n'}"
+check "backup fails: list untouched" "$before" "$(file)"
+chmod u+w "$(bak_of)"
+
 # --- edge cases ---
 fresh $'## Today\n- [x] orphan\n'
 run

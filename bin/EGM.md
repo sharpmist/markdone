@@ -72,9 +72,11 @@ Output contracts:
   list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
   that; `help` and `commands` never touch the list.
 - **Writes go through `save`.** `[t:add]`, `[t:finish]`, `[t:move]` and `[t:tidy]` build the result
-  in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` writes
-  with `cat "$1" >"$f"`, so the file itself (symlink, permissions) is kept. The write is not
-  atomic.
+  in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` first copies
+  the list to `$bak` (`.<list name>.bak` next to it, created with `umask 077`) and dies without
+  writing when that fails. It then writes with `cat "$1" >"$f"`, so the file itself (symlink,
+  permissions) is kept. The write is not atomic; after a crash during it, `$bak` holds the list as
+  it was.
 - **Startup.** `zmodload zsh/datetime zsh/zselect` must succeed, or `t` exits 1 before doing anything.
 - **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
   `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
@@ -112,6 +114,7 @@ Output contracts:
 
 - Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
+- Overwrites `$bak` with the current list before every write (`[t:save]`).
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
 - Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.
