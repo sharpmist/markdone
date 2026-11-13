@@ -49,6 +49,7 @@ Usage:
   t later <item>            move an item from Today to Later   (alias: demote)
   t rm <item>               remove an open item                (alias: remove)
   t reword <item> <text>    replace an open item's text, keeping its place
+  t move <item> @<list>     move an item to another list, same section (alias: mv)
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
@@ -182,6 +183,7 @@ commands() {
     'later '            'later <item>'         'Move an item from Today to Later'         'later 1' \
     'rm '               'rm <item>'            'Remove an item (t undo brings it back)'   'rm "old idea"' \
     'reword '           'reword <item> "<text>"' "Change an item's text"                 'reword 2 "Retest logout fix"' \
+    'move '             'move <item> @<list>'  'Move an item to another list'             'move "build" @Work' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
@@ -411,6 +413,28 @@ move() {
   fi
 }
 
+# move_to <dest> <n>: move open item n of this list to the list <dest>, keeping its section (Today
+# or Later). Both lists are locked (see the main flow). The item is added to <dest> first and only
+# then removed here, each with save, so a failure in between leaves it in both lists, never in
+# neither; each list can then be undone on its own.
+move_to() {
+  local dest=$1 n=$2 src=$name found sec item tmp out at
+  [[ $n == <-> ]] || die "usage: t move <item> @<list>"
+  found=$(awk -v N="$n" '/^## /{sec=substr($0,4)} /^- \[ \] / && ++c==N {print sec "\t" substr($0,7); exit}' "$f")
+  [[ -n $found ]] || die "no open item $n"
+  sec=${found%%$'\t'*}; item=${found#*$'\t'}
+  set_list "$dest"
+  tmp=$(mktemp); out=$(mktemp)
+  insert_item "$sec" "$item" "$out" <"$f" >"$tmp" || { rm -f "$tmp" "$out"; die "no '## $sec' heading in $f; nothing moved" }
+  save "$tmp" "$out"; at=$(<"$out")
+  set_list "$src"
+  awk -v N="$n" '/^- \[ \] / && ++c==N {next} {print}' "$f" >"$tmp" ||
+    { rm -f "$tmp" "$out"; die "could not remove item $n from $f; it's now in both $src and $dest" }
+  save "$tmp" "$out"
+  rm -f "$tmp" "$out"
+  print -r -- "Moved to $dest ($sec) as $at: $item" | render
+}
+
 # obsidian_vaults: the vault directories Obsidian knows about, one per line, most recently opened
 # first. Read from Obsidian's own list of vaults (obsidian.json, in the macOS, Linux, Flatpak or
 # Snap location); vaults whose directory is gone are left out. Prints nothing when there are none.
@@ -558,7 +582,7 @@ init() {
   return 0
 }
 
-# lock: take the list's lock, so t runs that change the list take turns instead of one silently
+# lock [fd variable]: take the list's lock, so t runs that change the list take turns instead of one silently
 # dropping another's change. A kernel lock (fcntl, via zsystem flock) on $lockfile, an empty file
 # that stays next to the list. The kernel releases it when this process ends, however it ends, so a
 # killed t never leaves a stale lock. exec closes the lock's descriptor (no -e), so the editor that
@@ -568,7 +592,7 @@ init() {
 lock() {
   local rc
   [[ -f $lockfile ]] || { : >>"$lockfile" } 2>/dev/null || die "could not create the lock file $lockfile"
-  zsystem flock -t 10 -i 0.05 -f lockfd "$lockfile" 2>/dev/null; rc=$?
+  zsystem flock -t 10 -i 0.05 -f ${1:-lockfd} "$lockfile" 2>/dev/null; rc=$?
   (( rc == 2 )) && die "another t has been using the list for 10 seconds; try again when it's done"
   (( rc == 0 )) || die "could not lock $lockfile"
 }
@@ -764,7 +788,7 @@ use_cmd() {
 }
 
 # ITEM_CMDS: the commands that take an <item>, with their aliases.
-ITEM_CMDS=(done d today promote later demote rm remove reword)
+ITEM_CMDS=(done d today promote later demote rm remove reword move mv)
 
 # list_choices <prefix>: the lists for Tab completion, "<prefix><name> \t<t lists line>", with the
 # name quoted for the shell when needed.
@@ -781,6 +805,7 @@ list_choices() {
 #   @<list>                   the commands, as after "t "
 #   [@<list>] <item command>  that list's open items (complete_items)
 #   use, lists rm, lists rename  the lists
+#   move <item>               the lists, as @<name>
 #   lists                     its subcommands
 complete_cmd() {
   local -a w=("$@")
@@ -789,6 +814,7 @@ complete_cmd() {
     @) list_choices @; exit 0 ;;
     "") [[ -n $sel ]] && commands; exit 0 ;;
     use|"lists rm"|"lists remove"|"lists rename") list_choices ""; exit 0 ;;
+    move\ *|mv\ *) (( $#w == 2 )) && list_choices @; exit 0 ;;
     lists)
       printf '%s\t%s\n' 'add ""' 'add "<name>"          Create a list' 'rm ' 'rm <name>             Delete a list' \
         'rename ' 'rename <old> <new>    Rename a list' '--json' '--json                The lists as JSON'
@@ -904,11 +930,27 @@ if [[ ! -f $f ]]; then
 fi
 # Archives from before there were several lists belong to the default list; move them to $adir,
 # under that list's lock (in a subshell, which releases it when done, when it isn't this one).
+# t move <item> @<list>: find the target list now, as both lists are locked below.
+if [[ $1 == (move|mv) ]]; then
+  [[ $# -ge 3 && ${@[-1]} == @?* ]] || die "usage: t move <item> @<list>"
+  dest=$(find_list "${${@[-1]}#@}") || die "no list called '${${@[-1]}#@}'; t lists shows them"
+  [[ $dest != "$name" ]] || die "the item is already in $name"
+fi
 old_archives=("$ldir"/Archive\ <->.md(N.))
 if (( $#old_archives )); then
   if [[ $name == "$dname" ]]; then lock; migrate_archives; else ( set_list "$dname"; lock; migrate_archives ); fi
 fi
-lock
+if [[ $1 == (move|mv) ]]; then
+  # Both lists' locks, always in the order of their files' paths, so two moves in opposite
+  # directions can't each hold one lock and wait for the other. The target list is tidied too.
+  set_list "$dest"; dfile=$f; set_list "$n"
+  if [[ $f < $dfile ]]; then lock; set_list "$dest"; lock destfd
+  else set_list "$dest"; lock destfd; set_list "$n"; lock; set_list "$dest"; fi
+  check_jira; tidy
+  set_list "$n"
+else
+  lock
+fi
 # undo runs before tidy: tidying first would be a change of its own, and undo would revert that.
 [[ $1 == undo ]] && { undo; exit }
 check_jira
@@ -949,6 +991,7 @@ case "$1" in
     [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
     n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
   pick|f) pick ;;
+  move|mv) n=$(item move "${@[2,-2]}") || exit; move_to "$dest" "$n" ;;
   complete) complete_items "$ccmd" ;;
   edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;

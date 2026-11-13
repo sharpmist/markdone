@@ -91,7 +91,8 @@ Jira sites, real project keys, personal paths or names. Use placeholders such as
   list's file, lock, backup and checksum all follow from its name. Don't use `TODO_FILE` directly
   except as the default list (`$deff`). Commands that add, delete or rename lists, or change the
   current one, hold the folder's lock (`dir_lock`) first and a list's own lock second, never the
-  other way round.
+  other way round. A command that locks two lists (`t move`) takes them in the order of their
+  files' paths.
 - **Locking:** every command that reads the list runs under its lock (`lock`, called before
   `tidy`) and holds it until the process ends. Don't read or write the list before that. The one
   exception is `pick`, which releases it while fzf is open and locks again before changing anything.

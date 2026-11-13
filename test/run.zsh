@@ -471,7 +471,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 26 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 27 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
@@ -1079,6 +1079,36 @@ hold 1500
 out=$("$T_BIN" @Job add quick 2>&1); rc=$?
 check "a named list works while the default list is locked" "0|Added 1 (Today): quick" "$rc|$out"
 kill -9 $holder; wait $holder 2>/dev/null
+
+# --- t move: an item to another list ---
+fresh $'## Today\n- [ ] Fix the build\n- [ ] Buy milk\n\n## Later\n- [ ] Paint the fence\n\n## Done\n'
+run lists add Work
+run move build @work;    check "move by text keeps the section" "0|Moved to Work (Today) as 1: Fix the build" "$rc|$out"
+run mv 2 @Work;          check "mv by number, from Later to Later" "0|Moved to Work (Later) as 2: Paint the fence" "$rc|$out"
+check "move: gone from the source list" $'## Today\n- [ ] Buy milk\n\n## Later\n\n## Done' "$(file)"
+check "move: in the target list" $'## Today\n- [ ] Fix the build\n\n## Later\n- [ ] Paint the fence\n\n## Done' "$(<"$dir/Work.md")"
+run @Work move fence @Todo; check "move from a named list" "Moved to Todo (Later) as 2: Paint the fence" "$out"
+run @Work undo; run undo
+check "move: undo in each list puts it back" $'## Today\n- [ ] Buy milk\n\n## Later\n\n## Done' "$(file)"
+check "move: undo in the target list takes it out" $'## Today\n- [ ] Fix the build\n\n## Later\n- [ ] Paint the fence\n\n## Done' "$(<"$dir/Work.md")"
+before=$(file)
+run move milk @Todo;     check "move to the same list fails" "1|t: the item is already in Todo" "$rc|$out"
+run move milk;           check "move without a list fails" "1|t: usage: t move <item> @<list>" "$rc|$out"
+run move milk @Nope;     check "move to an unknown list fails" "1|t: no list called 'Nope'; t lists shows them" "$rc|$out"
+run move nothing @Work;  check "move of an unknown item fails" "1|t: no open item matches 'nothing'" "$rc|$out"
+printf '## Later\n\n## Done\n' >"$dir/Later only.md"
+run move milk @"Later only"; check "move to a list without that section fails" 1 "$rc"
+check "failed moves change nothing" "$before" "$(file)"
+check "failed move leaves the target alone" $'## Later\n\n## Done' "$(<"$dir/Later only.md")"
+run complete move;       check "complete move: the items" $'1\t  1  Today  Buy milk' "$out"
+run complete move 1;     check "complete move <item>: the lists, as @<name>" "@'Later only' |@Todo |@Work " "${(j:|:)${(@)${(f)out}%%$'\t'*}}"
+# both lists are locked: a move waits for the target list's lock
+hold_file() { local saved=$TODO_FILE; TODO_FILE=$1; hold $2; TODO_FILE=$saved; }
+hold_file "$dir/Work.md" 80
+start=$EPOCHREALTIME; out=$("$T_BIN" move milk @Work 2>&1); rc=$?
+check "move waits for the target list's lock" "0|Moved to Work (Today) as 2: Buy milk|waited" \
+  "$rc|$out|$( (( EPOCHREALTIME - start > 0.5 )) && print waited || print 'did not wait')"
+wait $holder
 
 print "$pass passed, $fail failed"
 (( fail == 0 ))

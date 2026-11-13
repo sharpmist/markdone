@@ -67,6 +67,7 @@ t today <item>            move an item from Later to Today   (alias: promote)
 t later <item>            move an item from Today to Later   (alias: demote)
 t rm <item>               remove an open item                (alias: remove)
 t reword <item> <text>    replace an open item's text, keeping its place
+t move <item> @<list>     move an item to another list, same section (alias: mv)
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
@@ -133,13 +134,17 @@ $ t lists
 - **`t use <list>`** switches the current list, the one every command without `@<list>` uses, in
   all your terminals (it's saved in a hidden `.current` file in the folder). `t use` alone picks one
   with fzf; `t use Todo` (your default list) goes back.
+- **`t move <item> @<list>`** moves an item to another list, into the same section:
+  `t move build @work`, `t @work move 2 @Todo`.
 - **`TODO_LIST`** names the list for one terminal or one agent, overriding `t use`:
   `export TODO_LIST=work`.
 
 So a command uses `@<list>` if given, else `TODO_LIST`, else the list chosen with `t use`, else
 the default list. If the current list is deleted outside `t`, it warns and uses the default list.
 
-Each list has its own undo, lock and archives (`Archive/Work 2026.md`). `t lists rm` deletes a
+Each list has its own undo, lock and archives (`Archive/Work 2026.md`). `t move` locks both lists
+and changes both, adding the item to the target before removing it from the source, so undoing a
+move takes `t undo` in each list (`t @work undo` and `t undo`). `t lists rm` deletes a
 list's file but keeps its archives; it refuses the default list, the current list and, without
 `--force`, a list with open items. The default list can't be renamed or deleted, since
 `TODO_FILE` names it.
@@ -310,7 +315,8 @@ instead and puts its number on the command line. `t today ` offers only Later's 
 part of the item first (`t done fix` Tab) pre-fills the search.
 
 With several lists, `t @` Tab picks a list, `t @work ` Tab a command and `t @work done ` Tab one of
-that list's items. `t use `, `t lists rm ` and `t lists rename ` Tab pick a list, and `t lists `
+that list's items. `t use `, `t lists rm `, `t lists rename ` and `t move <item> ` Tab pick a
+list, and `t lists `
 Tab one of its subcommands. Anywhere else Tab works as before.
 
 `./install` turns it on. To do it by hand instead, add this to `~/.zshrc`, after fzf's own key
@@ -339,7 +345,8 @@ My todo list is managed with the `t` command. Run `t help` for all commands.
   `t reword "<text>" "<new text>"`. Undo your last change: `t undo`.
 - Never edit the todo file or its archives directly; `t` keeps the format and archives done items.
 - I may have several lists (`t lists` shows them). When I name one, use `t @<list> …`, e.g.
-  `t @work add "<text>"`; otherwise leave the current one as it is (don't run `t use`).
+  `t @work add "<text>"`; otherwise leave the current one as it is (don't run `t use`). Move an
+  item to another list with `t move "<text>" @<list>`.
 - Only touch the list when I ask.
 ```
 

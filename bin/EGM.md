@@ -25,6 +25,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t later <item>`                     | `demote`         | `[t:item]`, `[t:move]`          |
 | `t rm <item>`                        | `remove`         | `[t:item]`, `[t:remove]`        |
 | `t reword <item> <text>`             |                  | `[t:item]`, `[t:reword]`        |
+| `t move <item> @<list>`              | `mv`             | `[t:item]`, `[t:move_to]`       |
 | `t pick`                             | `f`              | `[t:pick]`, `[t:finish]`        |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
@@ -64,6 +65,7 @@ Internal helpers:
 - `[t:migrate_archives]`: moves archives from before there were several lists into `$adir`.
 - `[t:list_choices]`, `[t:complete_cmd]`: what Tab offers after `t <words>`.
 - `[t:open_count]`, `[t:js]`: a list file's open items; a JSON string.
+- `[t:move_to]`: moves an open item to another list, both already locked.
 - `[t:tidy]`: dates and moves ticked items to `## Done`, archives old Done items, links Jira keys.
 - `[t:linkify]`: turns bare Jira keys into Markdown links; `linkify all` processes every line.
 - `[t:render]`: shows Markdown links as OSC 8 hyperlinks when stdout is a terminal.
@@ -93,8 +95,8 @@ Output contracts:
   (`t commands`). `[@<list>] <item command>`: that list's open items, the insert being the item
   number (followed by ` ""` for `reword`) and the display the `t list` line with links shown as
   their text; `today`/`promote` offer only Later's items, `later`/`demote` only Today's.
-  `use`, `lists rm`, `lists rename`: the lists as `<name> `, displayed as in `t lists`. `lists`:
-  its subcommands. Anything else: nothing, with status 0. Only the item case reads (locks and
+  `use`, `lists rm`, `lists rename`: the lists as `<name> `, displayed as in `t lists`.
+  `move <item>`: the lists as `@<name> `. `lists`: its subcommands. Anything else: nothing, with status 0. Only the item case reads (locks and
   tidies) a list; an unknown `@<list>` there fails.
 - `t lists`: one line per list, `<* or space> <name padded> <n> open`, sorted by name.
   `t lists --json`: `[{"name":"Todo","open":3,"current":true}]`, one object per line.
@@ -207,6 +209,13 @@ Output contracts:
   inside a link does. Exactly one match is required; with none or several, it dies, listing the
   matches, and the list is unchanged. It runs under the lock, so the number can't change before
   it's used.
+- **Moving between lists.** `t move` (`mv`) takes the target from its last argument, which must
+  be `@<list>` naming another list; the arguments in between name the item in the source list.
+  Before reading either list it takes both lists' locks in the order of their files' paths, so
+  two moves in opposite directions can't deadlock, and tidies both. `[t:move_to]` inserts the item
+  at the end of the same section in the target (dying, with nothing changed, when that heading is
+  missing), saves the target, then removes it from the source and saves that: a failure in
+  between leaves the item in both lists, never in neither. Each list's undo covers its own half.
 - **Per list.** The lock, backup, checksum (so undo) and archives belong to one list, named after
   its file (`.<file>.lock`, `.<file>.bak`, `.<file>.sum`, `Archive/<list> <year>.md`).
 - **Item numbers.** `n` counts `- [ ] ` lines from the top of the file, across all sections.
@@ -241,6 +250,7 @@ Output contracts:
 
 - Rewrites the chosen list's file in place (`[t:save]`), from `add`, `done`, `today`, `later`,
   `rm`, `reword`, `pick` and from `[t:tidy]` on any list command when tidying changes the list.
+  `t move` rewrites two lists, the target first.
 - Overwrites `$bak` with the current list before every write, and `$sum` with the checksum of
   the new list after it (`[t:save]`); deletes `$bak` after a tidy that archived (`[t:tidy]`).
   `t undo` restores `$bak`.
