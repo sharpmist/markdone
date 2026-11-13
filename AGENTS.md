@@ -46,7 +46,8 @@ ZDOTDIR=$d TODO_FILE="$d/Todo.md" TODO_JIRA_KEYS= bin/t add "example"
 
 Run `test/run.zsh` before every commit; it must end with `N passed, 0 failed`. Add a test for
 every new behaviour and bug fix, and check that a bug-fix test fails without the fix. Tests run
-against throwaway files only, with `ZDOTDIR` pointed at an empty directory; keep it that way.
+against throwaway files only, with `HOME` and `ZDOTDIR` pointed at empty temporary directories;
+keep it that way.
 
 ## Keep it portable
 
