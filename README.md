@@ -23,6 +23,7 @@ t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
 t init                    create the list with its three headings (never overwrites)
 t help                    show this help                     (-h, --help)
+t version                 show the version                   (--version)
 t commands                list commands with examples, tab-separated (used by Tab completion)
 ```
 

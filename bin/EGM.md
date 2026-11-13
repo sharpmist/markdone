@@ -4,8 +4,8 @@
 
 `t` is the whole todo command: one zsh script that reads and rewrites a single Markdown list
 (`## Today`, `## Later`, `## Done`), using awk and perl for the text processing. Every command
-except `help`, `commands` and `init` first checks that the list exists, validates the Jira
-settings and tidies the list, then runs.
+except `help`, `version`, `commands` and `init` first checks that the list exists, validates
+the Jira settings and tidies the list, then runs.
 
 ## Interface
 
@@ -28,6 +28,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t undo`                             |                  | `[t:undo]`                      |
 | `t init`                             |                  | `[t:init]`                      |
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
+| `t version`                          | `--version`      | `print`                         |
 | `t commands`                         |                  | `[t:commands]`                  |
 
 Environment variables read at startup:
@@ -35,6 +36,8 @@ Environment variables read at startup:
 - `TODO_FILE`: the list file, default `$HOME/todo/Todo.md` (`[t:f]`).
 - `TODO_JIRA_KEYS`, `TODO_JIRA_URL`: Jira linking settings (`[t:JIRA_KEYS]`, `[t:JIRA_URL]`),
   validated by `[t:check_jira]`.
+- `T_VERSION` (set in `t`, not read from the environment): the release version. A pushed
+  `v<version>` tag must match it; the CI workflow checks this.
 - `EDITOR`: used by `t edit`, split on spaces, default `nvim`.
 
 Internal helpers:
@@ -67,8 +70,8 @@ Output contracts:
 
 ## Invariants
 
-- **The list must exist.** Only `t init` creates it: every command except `help`, `commands` and
-  `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
+- **The list must exist.** Only `t init` creates it: every command except `help`, `version`,
+  `commands` and `init` dies when `$f` is not a file (`[t:f]` check before `check_jira`).
 - **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
   already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
 - **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
@@ -80,8 +83,8 @@ Output contracts:
   lock's descriptor (`zsystem flock` without `-e`), so the editor `t edit` starts doesn't hold it.
   `t pick` holds the lock while fzf is open.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
-  list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
-  that; `help` and `commands` never touch the list.
+  list command, including `edit`, sees a tidied list. `help`, `version`, `commands` and `init`
+  exit before that; all but `init` never touch the list.
 - **Writes go through `save`.** `[t:add]`, `[t:finish]`, `[t:move]` and `[t:tidy]` build the result
   in a `mktemp` file and call `[t:save]` only when the step producing it succeeded. `save` first copies
   the list to `$bak` (`.<list name>.bak` next to it, created with `umask 077`) and dies without
