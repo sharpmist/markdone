@@ -383,33 +383,44 @@ check "EDITOR with arguments" "opened $TODO_FILE" "$out"
 
 # --- locking ---
 lock_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.lock"; }
+hold() { # <hundredths of a second>: hold the list's lock from another process; sets $holder
+  local ready="${TODO_FILE:h}/held"
+  zsh -fc 'zmodload zsh/system zsh/zselect
+    : >>"$1"; zsystem flock -f fd "$1" && : >"$2" && zselect -t $3' x "$(lock_of)" "$ready" $1 &
+  holder=$!
+  until [[ -e $ready ]]; do zselect -t 1; done
+  rm -f "$ready"
+}
 fresh "$EMPTY"
 for i in {1..20}; do "$T_BIN" add "parallel $i" >/dev/null 2>&1 & done; wait
 check "parallel adds: none lost" 20 "$(grep -c '^- \[ \] parallel ' "$TODO_FILE")"
-[[ ! -e $(lock_of) ]]; check "no lock left behind" 0 $?
 
 fresh "$EMPTY"
-sleep 60 & live=$!   # a running process to own the lock
-mkdir "$(lock_of)"; print $live >"$(lock_of)/pid"
-( zselect -t 50; rm -rf "$(lock_of)" ) &   # the owner unlocks after 0.5 s
+hold 50
 run add waited; check "waits for a lock that is released" "0|Added 1 (Today): waited" "$rc|$out"
-wait $!
-mkdir "$(lock_of)"; print $live >"$(lock_of)/pid"
+wait $holder
+hold 1500
 before=$(file); run add blocked
 check "gives up on a lock that is held" \
-  "1|t: the list is locked by another t (pid $live); if no t is running, remove $(lock_of)" "$rc|$out"
+  "1|t: another t has been using the list for 10 seconds; try again when it's done" "$rc|$out"
 check "held lock: list untouched" "$before" "$(file)"
-[[ -d $(lock_of) ]]; check "held lock: someone else's lock is kept" 0 $?
-kill $live; wait $live 2>/dev/null
-run add taken; check "takes over the lock of a process that is gone" "0|Added 2 (Today): taken" "$rc|$out"
-[[ ! -e $(lock_of) ]]; check "taken-over lock is released" 0 $?
+kill -9 $holder; wait $holder 2>/dev/null
+run add freed; check "lock of a killed process is free at once" "0|Added 2 (Today): freed" "$rc|$out"
 
+# t edit execs the editor, which closes the lock's descriptor. The editor checks from a child
+# process: the editor process itself (t after exec) could always relock a lock it still held.
 fresh "$EMPTY"
-out=$(EDITOR="ls -d $(lock_of)" "$T_BIN" edit 2>&1); rc=$?
-check "edit unlocks before starting the editor" 1 "$rc"
+cat >"$dir/editor" <<'EOS'
+#!/bin/sh
+zsh -fc 'zmodload zsh/system; zsystem flock -t 0 -f fd "$1" 2>/dev/null && echo free || echo held' x \
+  "$(dirname "$1")/.$(basename "$1").lock"
+EOS
+chmod +x "$dir/editor"
+out=$(EDITOR="$dir/editor" "$T_BIN" edit 2>&1)
+check "the editor started by t edit doesn't hold the lock" free "$out"
 
 fresh "$EMPTY"; chmod a-w "${TODO_FILE:h}"
-run; check "unwritable directory: can't lock" "1|t: could not create the lock $(lock_of)" "$rc|$out"
+run; check "unwritable directory: can't lock" "1|t: could not create the lock file $(lock_of)" "$rc|$out"
 chmod u+w "${TODO_FILE:h}"
 run help; [[ ! -e $(lock_of) ]]; check "help doesn't lock" 0 $?
 

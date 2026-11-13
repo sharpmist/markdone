@@ -41,7 +41,7 @@ Internal helpers:
 - `[t:render]`: shows Markdown links as OSC 8 hyperlinks when stdout is a terminal.
 - `[t:save]`: rewrites the list from a temp file.
 - `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
-- `[t:lock]`, `[t:unlock]`: take and release the list's lock, `$lockdir`.
+- `[t:lock]`: takes the list's lock on `$lockfile`.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -64,13 +64,12 @@ Output contracts:
   already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
 - **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
   and `tidy`, and holds the lock until it exits, so reading, tidying and writing are one step.
-  `[t:lock]` creates `$lockdir` (`.<list name>.lock` next to the list) with `mkdir`, which only
-  one run can do, and writes its pid there. It retries every 0.1 s for 5 s, then dies. It takes
-  over a lock whose pid is no longer running. Two runs taking over the same dead lock at the same
-  moment can both proceed; that needs a killed `t` plus two runs waiting on it.
-- **Unlocking.** The top-level `trap unlock EXIT` releases the lock on every exit, including `die`
-  and `HUP`, `INT` and `TERM` (trapped to `exit`). `t edit` unlocks before `exec`, so an editing
-  session never blocks other runs. `t pick` holds the lock while fzf is open.
+  `[t:lock]` takes an fcntl lock (`zsystem flock`) on `$lockfile`, an empty `.<list name>.lock`
+  next to the list, creating the file if needed. It checks every 0.05 s for up to 10 s, then dies.
+- **Unlocking.** The kernel releases the lock when the process ends, however it ends (`die`, a
+  signal, `kill -9`), so there are no stale locks. Child processes never hold it. `exec` closes the
+  lock's descriptor (`zsystem flock` without `-e`), so the editor `t edit` starts doesn't hold it.
+  `t pick` holds the lock while fzf is open.
 - **Tidy runs first.** `check_jira` and `tidy` run before the second `case` dispatch, so every
   list command, including `edit`, sees a tidied list. `help`, `commands` and `init` exit before
   that; `help` and `commands` never touch the list.
@@ -86,7 +85,8 @@ Output contracts:
   lock but before `check_jira` and `tidy`, which would otherwise make a change of their own. A
   `[t:tidy]` that archived items deletes `$bak`, because restoring would archive them twice; undo
   then dies with `nothing to undo`.
-- **Startup.** `zmodload zsh/datetime zsh/zselect` must succeed, or `t` exits 1 before doing anything.
+- **Startup.** `zmodload zsh/datetime zsh/system` must succeed, or `t` exits 1 before doing
+  anything. `zsystem flock -i` needs zsh 5.8 or newer.
 - **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
   `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
   list everything.
@@ -136,7 +136,8 @@ Output contracts:
 - Writes warnings and errors to stderr prefixed with `t: `; exits 1 on `[t:die]` and on an unknown
   command (after printing the usage to stderr). `t pick` exits with fzf's status when nothing is
   chosen.
-- Creates and removes `$lockdir`, a directory holding a `pid` file, next to the list.
+- Creates `$lockfile`, an empty file next to the list, and holds an fcntl lock on it while running.
+  The file stays; only the lock is released.
 - No network access.
 
 ## Verification

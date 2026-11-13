@@ -5,12 +5,12 @@
 #   TODO_JIRA_KEYS  Jira project keys to link, space-separated, e.g. "PROJ OPS"; empty = no links
 #   TODO_JIRA_URL   Jira browse URL the keys are appended to, e.g. https://your-company.atlassian.net/browse/
 
-zmodload zsh/datetime zsh/zselect || exit 1
+zmodload zsh/datetime zsh/system || exit 1
 
 f="${TODO_FILE:-$HOME/todo/Todo.md}"
 
 # The lock and the backup sit next to the list, hidden so notes apps ignore them; see lock() and save().
-lockdir="${f:h}/.${f:t}.lock" locked=0
+lockfile="${f:h}/.${f:t}.lock"
 bak="${f:h}/.${f:t}.bak"
 
 # Jira keys in items become links. Only the listed project keys count, so UTF-8 or ISO-8601 stay
@@ -274,33 +274,19 @@ init() {
 }
 
 # lock: take the list's lock, so t runs that change the list take turns instead of one silently
-# dropping another's change. mkdir is atomic, so only one run can create $lockdir; the owner writes
-# its pid into it. Waits up to 5 seconds. A lock whose owner is no longer running (killed before it
-# could unlock) is taken over. The EXIT trap below removes the lock however t ends.
+# dropping another's change. A kernel lock (fcntl, via zsystem flock) on $lockfile, an empty file
+# that stays next to the list. The kernel releases it when this process ends, however it ends, so a
+# killed t never leaves a stale lock. exec closes the lock's descriptor (no -e), so the editor that
+# t edit starts doesn't hold it. Child processes don't hold it and can't release it. Waits up to 10
+# seconds for another run, checking every 0.05 s (the default, once a second, lets only one waiting
+# run in per second).
 lock() {
-  local pid tries=0
-  until mkdir -- "$lockdir" 2>/dev/null; do
-    [[ -d $lockdir ]] || die "could not create the lock $lockdir"
-    pid=$(cat -- "$lockdir/pid" 2>/dev/null)
-    if [[ $pid == <-> ]] && ! kill -0 "$pid" 2>/dev/null; then
-      rm -rf -- "$lockdir"; continue
-    fi
-    (( ++tries <= 50 )) ||
-      die "the list is locked by another t (pid ${pid:-unknown}); if no t is running, remove $lockdir"
-    zselect -t 10   # 0.1 s
-  done
-  locked=1
-  print -r -- $$ >"$lockdir/pid" || die "could not write $lockdir/pid"
+  local rc
+  [[ -f $lockfile ]] || { : >>"$lockfile" } 2>/dev/null || die "could not create the lock file $lockfile"
+  zsystem flock -t 10 -i 0.05 -f lockfd "$lockfile" 2>/dev/null; rc=$?
+  (( rc == 2 )) && die "another t has been using the list for 10 seconds; try again when it's done"
+  (( rc == 0 )) || die "could not lock $lockfile"
 }
-
-unlock() {
-  if (( locked )); then rm -rf -- "$lockdir"; locked=0; fi
-}
-
-# Traps must be set here, at the top level: in zsh an EXIT trap set inside a function runs when
-# that function returns. Subshells don't run it, so pipelines can't drop the lock early.
-trap unlock EXIT
-trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 # undo: put back the list as it was before t's last write. The current list becomes the backup,
 # so a second undo redoes. Refuses when the list was changed since that write (by hand, in an
@@ -361,7 +347,6 @@ case "$1" in
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;
-  edit|e)   # unlock first: exec skips the EXIT trap, and an editing session mustn't block other runs
-    unlock; exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
+  edit|e) exec ${=EDITOR:-nvim} "$f" ;;   # split, so EDITOR="code -w" works
   *) print -r -- "t: unknown command '$1'" >&2; usage >&2; exit 1 ;;
 esac

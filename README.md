@@ -29,7 +29,7 @@ Commands that read the list first tidy it: items ticked in an editor get today's
 ## Requirements
 
 - macOS or Linux.
-- zsh (with its standard `zsh/datetime` and `zsh/zselect` modules), awk and perl.
+- zsh 5.8 or newer (with its standard `zsh/datetime` and `zsh/system` modules), awk and perl.
 - Optional: [fzf](https://github.com/junegunn/fzf) for `t pick` and Tab completion. The Tab
   completion setup below uses `fzf --zsh`, which needs fzf 0.48 or newer.
 
@@ -82,10 +82,10 @@ error and leaves it alone.
 
 Archives (`Archive 2026.md`, …) are written to the same directory as the list.
 
-While a command runs, `t` holds a lock: a hidden `.Todo.md.lock` directory next to the list (named
-after your list file). Runs that start meanwhile, from you or an AI agent, wait for it, up to 5
-seconds, so no change is lost. A lock left by a `t` that was killed is taken over. If `t` reports
-the list is locked and no `t` is running, remove that directory.
+While a command runs, `t` holds a lock on a hidden, empty `.Todo.md.lock` file next to the list
+(named after your list file). Runs that start meanwhile, from you or an AI agent, wait for it, up to
+10 seconds, so no change is lost. The system releases the lock when `t` ends, even if it's killed,
+so it can't get stuck.
 
 Before every change, `t` copies the list to a hidden `.Todo.md.bak` next to it, so a crash while
 writing can't lose it. `t undo` puts that copy back, undoing the last change `t` made; running it
