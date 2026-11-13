@@ -458,13 +458,13 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 19 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 20 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t
 cmds=$out
 fresh "$EMPTY"
-for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init$' -e '^undo$')"}; do
+for ins in ${(f)"$(print -r -- "$cmds" | cut -f1 | grep -v -e '""$' -e ' $' -e '^pick$' -e '^edit$' -e '^init' -e '^undo$')"}; do
   run ${=ins}; check "inserted command 't $ins' runs" 0 "$rc"
 done
 
@@ -819,6 +819,124 @@ check "install without fzf: Tab completion left off" "0|install: fzf isn't insta
 
 inst --help; [[ $rc == 0 && $out == *"./install --uninstall"* ]]; check "install --help" 0 $?
 inst --bogus; check "install: unknown option fails" "1|install: unknown option '--bogus' (see ./install --help)" "$rc|$out"
+# --- t init with Obsidian vaults ---
+# A throwaway home with Obsidian's list of vaults; TODO_FILE unset, as for a new user.
+vhome() { # <vault dir names...>: new $home listing these vaults (the last one most recently opened)
+  home=$(mktemp -d); dirs+=$home
+  local reg="$home/Library/Application Support/obsidian" json= i=0 v
+  mkdir -p "$reg"
+  for v; do mkdir -p "$home/Vaults/$v"; json+="${json:+,}\"v$i\":{\"path\":\"$home/Vaults/${v//\"/\\\"}\",\"ts\":$(( ++i ))}"; done
+  print -r -- "{\"vaults\":{$json,\"gone\":{\"path\":\"$home/gone\",\"ts\":99}}}" >"$reg/obsidian.json"
+}
+tinit() { # <args...>: run t as the new user, without a terminal; sets $out and $rc
+  out=$(unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home "$T_BIN" "$@" </dev/null 2>&1); rc=$?
+}
+ttyinit() { # <answers> <args...>: the same in a terminal, typing the answers; sets $out and $rc
+  local ans=$1 buf= chunk i; shift; targs=("$@")
+  zpty -b TTY 'stty -echo; print READY; (unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home "$T_BIN" "${targs[@]}"); print -r -- "<rc=$?>"'
+  for i in {1..200}; do while zpty -r -t TTY chunk 2>/dev/null; do buf+=$chunk; done; [[ $buf == *READY* ]] && break; zselect -t 5; done
+  buf=${buf#*READY$'\r\n'}
+  zpty -w TTY "$ans"
+  for i in {1..400}; do while zpty -r -t TTY chunk 2>/dev/null; do buf+=$chunk; done; [[ $buf == *'<rc='<->'>'* ]] && break; zselect -t 5; done
+  zpty -d TTY
+  buf=${buf//$'\r'/}; rc=${${buf##*<rc=}%%>*}; out=${${buf%<rc=*}%$'\n'}
+}
+MARK='# markdone: where t keeps the list (set by t init)'
+
+vhome Work Notes
+ttyinit $'2\ny' init --obsidian
+check "init --obsidian: lists vaults, newest first, and creates the list in Todo/" "0|Obsidian vaults:
+  1  $home/Vaults/Notes
+  2  $home/Vaults/Work
+Which one should hold the list? [1] Created $home/Vaults/Work/Todo/Todo.md
+Use this list from now on, also from AI agents? This adds TODO_FILE to ~/.zshenv. [Y/n] Saved in ~/.zshenv: t now uses $home/Vaults/Work/Todo/Todo.md" "$rc|$out"
+check "init --obsidian: the list has the three headings" "$EMPTY" "$(<"$home/Vaults/Work/Todo/Todo.md")"$'\n'
+check "init --obsidian: ~/.zshenv gets one marked line" "$MARK
+export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Work/Todo/Todo.md}\"" "$(<"$home/.zshenv")"
+tinit add "from the vault"
+check "after init --obsidian, t uses the vault's list" "0|Added 1 (Today): from the vault" "$rc|$out"
+print -r -- 'export EDITOR=vi' >>"$home/.zshenv"
+ttyinit $'\n' init --obsidian
+check "init --obsidian again: Enter picks the newest vault and saves" "0|Saved in ~/.zshenv: t now uses $home/Vaults/Notes/Todo/Todo.md" "$rc|${${(f)out}[-1]##*\] }"
+check "init --obsidian again: the earlier line is replaced, the rest kept" "export EDITOR=vi
+
+$MARK
+export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Notes/Todo/Todo.md}\"" "$(<"$home/.zshenv")"
+ttyinit 1 init --obsidian
+check "init --obsidian: an existing list is used as it is" \
+  "$home/Vaults/Notes/Todo/Todo.md already exists; using it as it is|~/.zshenv already points t at this list" \
+  "${${(@f)out}[-2]##*\] }|${${(@f)out}[-1]}"
+
+vhome Solo
+ttyinit n init --obsidian
+check "init --obsidian, one vault, not saved: shows the line" "0|Obsidian vault: $home/Vaults/Solo
+Created $home/Vaults/Solo/Todo/Todo.md
+Use this list from now on, also from AI agents? This adds TODO_FILE to ~/.zshenv. [Y/n] Not saved. To use the list, add this to ~/.zshenv:
+  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|$out"
+[[ ! -e $home/.zshenv ]]; check "init --obsidian, not saved: no ~/.zshenv written" 0 $?
+
+vhome Solo
+tinit init --obsidian
+check "init --obsidian without a terminal, one vault: asks nothing, shows the line" "0|Obsidian vault: $home/Vaults/Solo
+Created $home/Vaults/Solo/Todo/Todo.md
+To use it, add this to ~/.zshenv:
+  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|$out"
+vhome Work Notes
+tinit init --obsidian
+check "init --obsidian without a terminal, several vaults: fails, listing them" "1|t: found 2 Obsidian vaults; run t init --obsidian in a terminal to choose one, or t init <path>:
+  $home/Vaults/Notes
+  $home/Vaults/Work" "$rc|$out"
+
+vhome Solo; print -r -- 'export TODO_FILE="$HOME/elsewhere.md"' >"$home/.zshenv"
+before=$(<"$home/.zshenv")
+ttyinit "" init --obsidian
+check "init --obsidian: a TODO_FILE set elsewhere in ~/.zshenv is left alone" "0|~/.zshenv already sets TODO_FILE, so it's left alone:
+  1: export TODO_FILE=\"\$HOME/elsewhere.md\"
+To use this list, change that to:
+  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|${(F)${(@f)out}[3,-1]}"
+check "init --obsidian: that ~/.zshenv is unchanged" "$before" "$(<"$home/.zshenv")"
+
+vhome 'My "odd" $vault'
+ttyinit y init --obsidian
+check "init --obsidian: odd vault names are quoted for ~/.zshenv" "$home/Vaults/My \"odd\" \$vault/Todo/Todo.md" \
+  "$(HOME=$home zsh -fc 'unset TODO_FILE; source "$HOME/.zshenv"; print -r -- $TODO_FILE')"
+
+vhome Work Notes
+ttyinit 7 init --obsidian; check "init --obsidian: a choice out of range fails" "1|t: no choice '7'; nothing done" "$rc|${${(f)out}[-1]##*\] }"
+ttyinit 0 init --obsidian; check "init --obsidian: 0 isn't a choice" 1 "$rc"
+ttyinit $'\C-d' init --obsidian; check "init --obsidian: Ctrl-D, nothing done" "1|t: no answer; nothing done" "$rc|${${(f)out}[-1]}"
+[[ ! -e $home/Vaults/Work/Todo && ! -e $home/Vaults/Notes/Todo ]]; check "init --obsidian: failed choices create nothing" 0 $?
+tinit init --obsidian extra; check "init --obsidian with an extra argument fails" "1|t: usage: t init [<path> | --obsidian]" "$rc|$out"
+tinit init --bogus;          check "init with an unknown option fails" "1|t: usage: t init [<path> | --obsidian]" "$rc|$out"
+
+home=$(mktemp -d); dirs+=$home
+tinit init --obsidian
+check "init --obsidian without vaults fails" \
+  "1|t: found no Obsidian vaults (Obsidian lists a vault once you've opened it); use t init <path> instead" "$rc|$out"
+
+# t init <path>: never asks; shows the ~/.zshenv line. ${home:A}: on macOS, /var is a symlink.
+home=$(mktemp -d); dirs+=$home; home=${home:A}
+out=$(unset TODO_FILE; cd "$home"; HOME=$home ZDOTDIR=$home "$T_BIN" init "lists/Todo.md" </dev/null 2>&1); rc=$?
+check "init <path>: relative to the current directory, shows the ~/.zshenv line" "0|Created $home/lists/Todo.md
+To use it, add this to ~/.zshenv:
+  export TODO_FILE=\"\${TODO_FILE:-\$HOME/lists/Todo.md}\"" "$rc|$out"
+tinit init "$home/lists/Todo.md"; check "init <path> refuses an existing list" "1|t: $home/lists/Todo.md already exists; not changed" "$rc|$out"
+tinit init a b; check "init with two paths fails" "1|t: usage: t init [<path> | --obsidian]" "$rc|$out"
+
+# Plain t init: offers the vaults only in a terminal, and only when TODO_FILE isn't set.
+vhome Solo
+tinit init
+check "plain init without a terminal: the default place, no questions" "0|Created $home/todo/Todo.md" "$rc|$out"
+vhome Solo
+ttyinit $'y\ny' init
+check "plain init in a terminal offers the vault" "0|Keep the list in your Obsidian vault, in $home/Vaults/Solo/Todo? [Y/n] Created $home/Vaults/Solo/Todo/Todo.md" "$rc|${(F)${(@f)out}[1]}"
+[[ -f $home/Vaults/Solo/Todo/Todo.md && ! -e $home/todo && -f $home/.zshenv ]]; check "plain init in a terminal: list made in the vault, and saved" 0 $?
+vhome Solo
+ttyinit n init
+check "plain init in a terminal, vault declined: the default place" "0|Keep the list in your Obsidian vault, in $home/Vaults/Solo/Todo? [Y/n] Created $home/todo/Todo.md" "$rc|$out"
+vhome Work Notes
+ttyinit 0 init
+check "plain init in a terminal, several vaults: 0 keeps the default place" "Created $home/todo/Todo.md" "${${(@f)out}[-1]##*\] }"
 
 print "$pass passed, $fail failed"
 (( fail == 0 ))

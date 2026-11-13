@@ -39,6 +39,8 @@ ZDOTDIR=$d TODO_FILE="$d/Todo.md" TODO_JIRA_KEYS= bin/t add "example"
 - Set `TODO_JIRA_KEYS` (and `TODO_JIRA_URL`) explicitly when the result depends on Jira linking.
 - Never run `./install` against the real home: it links into `~/.local/bin` and edits
   `~/.zshrc`. Run it with a throwaway one, `HOME=$d ZDOTDIR=$d ./install`, as the tests do.
+- `t init` reads Obsidian's list of vaults under `$HOME` and can write `$ZDOTDIR/.zshenv`
+  (default `~/.zshenv`). Run it only with a throwaway `HOME` and `ZDOTDIR`, as the tests do.
 
 ## Tests
 

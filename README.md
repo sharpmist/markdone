@@ -69,7 +69,8 @@ t reword <item> <text>    replace an open item's text, keeping its place
 t pick                    choose an item with fzf, mark done (alias: f)
 t edit                    open the list in $EDITOR           (alias: e)
 t undo                    undo the last change; run it again to redo
-t init                    create the list with its three headings (never overwrites)
+t init [<path>]           create the list with its three headings (never overwrites)
+t init --obsidian         create the list in an Obsidian vault you pick, in its Todo folder
 t help                    show this help                     (-h, --help)
 t version                 show the version                   (--version)
 t commands                list commands with examples, tab-separated (used by Tab completion)
@@ -128,7 +129,8 @@ It also warns when your `~/.zshrc` defines its own `t`, such as `alias t="tmux"`
 this one. It never replaces an existing `t`, and running it again only does what isn't done yet.
 `./install --uninstall` removes the link and the `~/.zshrc` line. It doesn't touch your list.
 
-Then open a new terminal and create your list with `t init` (see below for choosing where it lives).
+Then open a new terminal and create your list with `t init`, or with `t init --obsidian` to keep it
+in an Obsidian vault (see [Keeping the list in Obsidian](#keeping-the-list-in-obsidian)).
 
 ### Configure
 
@@ -164,7 +166,38 @@ t init
 
 This writes the three section headings (`## Today`, `## Later`, `## Done`) to `$TODO_FILE`, creating
 its directory if needed. It never overwrites: if the file already exists, `t init` stops with an
-error and leaves it alone.
+error and leaves it alone. `t init <path>` creates the list at `<path>` instead and shows the
+`~/.zshenv` line that makes `t` use it.
+
+### Keeping the list in Obsidian
+
+`t init` can put the list in an [Obsidian](https://obsidian.md) vault, in a `Todo` folder, so you can
+read and tick it in Obsidian too:
+
+```sh
+t init --obsidian
+```
+
+It reads the vaults Obsidian knows about (any vault you've opened in it) and asks which one to use.
+With a single vault it just names it. It then creates `<vault>/Todo/Todo.md` and, if you agree, adds
+a line to `~/.zshenv` so that `t` and your AI agents use that list from then on:
+
+```sh
+# markdone: where t keeps the list (set by t init)
+export TODO_FILE="${TODO_FILE:-$HOME/Documents/My Vault/Todo/Todo.md}"
+```
+
+Running it again replaces that line. If `~/.zshenv` already sets `TODO_FILE` some other way, it's
+left alone and `t init` shows what to change. If the vault already has a list (say, synced from
+another computer), `t init --obsidian` uses it as it is. A plain `t init` in a terminal offers your
+vaults too, unless `TODO_FILE` is already set.
+
+`t init` only asks questions in a terminal. Run elsewhere (by a script or an AI agent), it asks
+nothing: it uses the only vault, stops with a list if there are several, and shows the `~/.zshenv`
+line instead of adding it.
+
+In the vault, the archives (`Archive 2026.md`, …) are ordinary notes next to the list. The lock,
+backup and checksum files start with a dot, so Obsidian doesn't show them.
 
 Archives (`Archive 2026.md`, …) are written to the same directory as the list.
 

@@ -39,7 +39,8 @@ Usage:
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
-  t init                    create the list with its three headings (never overwrites)
+  t init [<path>]           create the list with its three headings (never overwrites)
+  t init --obsidian         create the list in an Obsidian vault you pick, in its Todo folder
   t help                    show this help                     (-h, --help)
   t version                 show the version                   (--version)
   t commands                list commands with examples, tab-separated (used by Tab completion)
@@ -161,6 +162,7 @@ commands() {
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
     'init'              'init'                 'Create the list (never overwrites)'       'init' \
+    'init --obsidian'   'init --obsidian'      'Create the list in an Obsidian vault'     'init --obsidian' \
     'version'           'version'              'Show the version'                         'version' \
     'help'              'help'                 'Show help'                                'help'
   do
@@ -373,13 +375,151 @@ move() {
   fi
 }
 
-# init: create the list with its three headings. Never overwrites: dies when anything is already
-# at $f, so an existing list can't be emptied by accident.
+# obsidian_vaults: the vault directories Obsidian knows about, one per line, most recently opened
+# first. Read from Obsidian's own list of vaults (obsidian.json, in the macOS, Linux, Flatpak or
+# Snap location); vaults whose directory is gone are left out. Prints nothing when there are none.
+obsidian_vaults() {
+  local c
+  for c in "$HOME/Library/Application Support/obsidian/obsidian.json" \
+           "${XDG_CONFIG_HOME:-$HOME/.config}/obsidian/obsidian.json" \
+           "$HOME/.var/app/md.obsidian.Obsidian/config/obsidian/obsidian.json" \
+           "$HOME/snap/obsidian/current/.config/obsidian/obsidian.json"; do
+    [[ -r $c ]] || continue
+    perl -MJSON::PP -e '
+      local $/; my $j = eval { decode_json(<STDIN>) }; exit 0 unless ref $j eq "HASH";
+      my $v = ref $j->{vaults} eq "HASH" ? $j->{vaults} : {};
+      my @v = grep { ref $_ eq "HASH" && defined $_->{path} && $_->{path} !~ /\n/ && -d $_->{path} } values %$v;
+      print "$_->{path}\n" for sort { ($b->{ts} || 0) <=> ($a->{ts} || 0) } @v' <"$c"
+  done | awk '!seen[$0]++'
+}
+
+# ask <question>: print the question and read one line of answer from stdin into $REPLY. Only
+# called when stdin is a terminal, so an AI agent or script is never left waiting for an answer.
+# Dies when input ends (Ctrl-D), changing nothing.
+ask() {
+  print -rn -- "$1 "
+  IFS= read -r REPLY || { print; die "no answer; nothing done" }
+}
+
+# pick_vault <offer>: choose an Obsidian vault for the list and print its directory, or nothing to
+# keep the list where it is. With offer=1 (plain t init in a terminal), not using a vault is one of
+# the choices; otherwise a vault must be chosen. Asks only when stdin is a terminal; otherwise a
+# single vault is taken and several are an error. Prompts go to stderr; stdout is the answer.
+pick_vault() {
+  local offer=$1 i n; local -a v
+  v=("${(@f)$(obsidian_vaults)}"); v=(${v:#})
+  if (( ! $#v )); then
+    (( offer )) && return 0
+    die "found no Obsidian vaults (Obsidian lists a vault once you've opened it); use t init <path> instead"
+  fi
+  if [[ ! -t 0 ]] && (( $#v > 1 )); then
+    die "found $#v Obsidian vaults; run t init --obsidian in a terminal to choose one, or t init <path>:"$'\n'"${(F)${(@)v/#/  }}"
+  fi
+  if (( $#v == 1 )); then
+    if (( offer )); then
+      ask "Keep the list in your Obsidian vault, in ${v[1]}/Todo? [Y/n]" >&2
+      [[ $REPLY == ([yY]*|) ]] || return 0
+    else
+      print -r -- "Obsidian vault: ${v[1]}" >&2
+    fi
+    print -r -- "${v[1]}"; return 0
+  fi
+  {
+    print -r -- "Obsidian vaults:"
+    (( offer )) && printf '  %d  %s\n' 0 "not in a vault ($f)"
+    for i in {1..$#v}; do printf '  %d  %s\n' $i "${v[i]}"; done
+    ask "Which one should hold the list? [1]"
+  } >&2
+  n=${REPLY:-1}
+  [[ $n == <-> ]] && (( n <= $#v && (n > 0 || offer) )) || die "no choice '$REPLY'; nothing done"
+  (( n )) && print -r -- "${v[n]}"
+  return 0
+}
+
+# zshenv_line <file>: the ~/.zshenv line that makes <file> the list, written so that a TODO_FILE set
+# when t runs still wins. Paths under $HOME are written as $HOME/...; \ " $ ` are escaped.
+zshenv_line() {
+  local p=$1 pre=
+  [[ $p == $HOME/* ]] && { pre='$HOME'; p=${p#$HOME} }
+  p=${p//\\/\\\\}; p=${p//\"/\\\"}; p=${p//\$/\\\$}; p=${p//\`/\\\`}
+  print -r -- "export TODO_FILE=\"\${TODO_FILE:-$pre$p}\""
+}
+
+# remember_list: make $f the list for every later t run, from the terminal or an AI agent, with a
+# marked TODO_FILE line in ~/.zshenv. Asks first, and only in a terminal; otherwise it shows the
+# line. Replaces the line an earlier t init wrote, and leaves ~/.zshenv alone when it sets
+# TODO_FILE some other way. Rewrites in place, so a ~/.zshenv that is a symlink stays one.
+remember_list() {
+  local env=${ZDOTDIR:-$HOME}/.zshenv mark='# markdone: where t keeps the list (set by t init)' line other tmp
+  line=$(zshenv_line "$f")
+  if [[ -f $env ]]; then
+    if awk -v mark="$mark" -v line="$line" 'p == mark && $0 == line { found = 1 } { p = $0 } END { exit !found }' "$env"; then
+      print -r -- "${env/#$HOME/~} already points t at this list"; return 0
+    fi
+    other=$(awk -v mark="$mark" 'p != mark && /TODO_FILE/ { print "  " NR ": " $0 } { p = $0 }' "$env")
+    if [[ -n $other ]]; then
+      print -r -- "${env/#$HOME/~} already sets TODO_FILE, so it's left alone:"$'\n'"$other"
+      print -r -- "To use this list, change that to:"$'\n'"  $line"
+      return 0
+    fi
+  fi
+  if [[ ! -t 0 ]]; then
+    print -r -- "To use it, add this to ${env/#$HOME/~}:"$'\n'"  $line"
+    return 0
+  fi
+  ask "Use this list from now on, also from AI agents? This adds TODO_FILE to ${env/#$HOME/~}. [Y/n]"
+  if [[ $REPLY != ([yY]*|) ]]; then
+    print -r -- "Not saved. To use the list, add this to ${env/#$HOME/~}:"$'\n'"  $line"
+    return 0
+  fi
+  tmp=$(mktemp) || die "could not create a temp file; ${env/#$HOME/~} not changed"
+  # Drop an earlier t init line (marker, line and the blank lines before them), then append.
+  { [[ ! -f $env ]] || awk -v mark="$mark" '
+      $0 == "" { blanks = blanks "\n"; next }
+      $0 == mark { blanks = ""; skip = 1; next }
+      skip && /TODO_FILE/ { skip = 0; next }
+      { printf "%s", blanks; blanks = ""; skip = 0; print }' "$env" >"$tmp"
+  } && { [[ ! -s $tmp ]] || print; print -r -- "$mark"; print -r -- "$line" } >>"$tmp" &&
+    cat "$tmp" >"$env" || { rm -f "$tmp"; die "could not update $env" }
+  rm -f "$tmp"
+  print -r -- "Saved in ${env/#$HOME/~}: t now uses $f"
+}
+
+# init [<path> | --obsidian]: create the list with its three headings. Never overwrites: dies when
+# anything is already at the file, so an existing list can't be emptied by accident.
+#   t init            at $f (TODO_FILE or the default). In a terminal, with TODO_FILE unset and
+#                     Obsidian vaults around, first offers to put the list in a vault instead.
+#   t init <path>     at <path>, then shows the ~/.zshenv line that makes t use it. Never asks.
+#   t init --obsidian in <vault>/Todo/Todo.md, for a vault chosen from Obsidian's list, then offers
+#                     to remember it in ~/.zshenv. An existing list there (e.g. synced from another
+#                     computer) is used as it is. Without a terminal it asks nothing: it takes the
+#                     only vault (several are an error) and shows the ~/.zshenv line.
 init() {
-  [[ ! -e $f && ! -L $f ]] || die "$f already exists; not changed"
-  mkdir -p -- "${f:h}" || die "could not create the directory ${f:h}"
-  printf '## Today\n\n## Later\n\n## Done\n' >"$f" || die "could not write $f"
-  print -r -- "Created $f"
+  local vault= in_vault=0 usage="usage: t init [<path> | --obsidian]"
+  case $1 in
+    --obsidian) (( $# == 1 )) || die "$usage"; in_vault=1; vault=$(pick_vault 0) || exit ;;
+    -*) die "$usage" ;;
+    "") (( $# <= 1 )) || die "$usage"
+        if [[ -z ${TODO_FILE-} && -t 0 && -t 1 ]]; then vault=$(pick_vault 1) || exit; fi
+        [[ -n $vault ]] && in_vault=1 ;;
+    *) (( $# == 1 )) || die "$usage"; f=${1:a} ;;
+  esac
+  [[ -n $vault ]] && f=$vault/Todo/Todo.md
+  if [[ -e $f || -L $f ]]; then
+    (( in_vault )) && [[ -f $f ]] || die "$f already exists; not changed"
+    print -r -- "$f already exists; using it as it is"
+  else
+    mkdir -p -- "${f:h}" || die "could not create the directory ${f:h}"
+    printf '## Today\n\n## Later\n\n## Done\n' >"$f" || die "could not write $f"
+    print -r -- "Created $f"
+  fi
+  if (( in_vault )); then
+    remember_list
+  elif [[ -n $1 && $f != ${${TODO_FILE:-$HOME/todo/Todo.md}:a} ]]; then
+    local env=${ZDOTDIR:-$HOME}/.zshenv
+    print -r -- "To use it, add this to ${env/#$HOME/~}:"$'\n'"  $(zshenv_line "$f")"
+  fi
+  return 0
 }
 
 # lock: take the list's lock, so t runs that change the list take turns instead of one silently
@@ -474,7 +614,7 @@ case "$1" in
   --version|version) print -r -- "t $T_VERSION"; exit 0 ;;
   commands) commands; exit 0 ;;
   complete) (( ${ITEM_CMDS[(Ie)$2]} )) || exit 0 ;;   # no item to offer: don't touch the list
-  init) init; exit 0 ;;
+  init) shift; init "$@"; exit 0 ;;
 esac
 
 [[ -f $f ]] || die "$f not found; create it with 't init', or set TODO_FILE to your list"

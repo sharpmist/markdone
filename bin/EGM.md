@@ -26,7 +26,7 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t pick`                             | `f`              | `[t:pick]`, `[t:finish]`        |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
-| `t init`                             |                  | `[t:init]`                      |
+| `t init [<path> \| --obsidian]`      |                  | `[t:init]`, `[t:pick_vault]`    |
 | `t help`                             | `-h`, `--help`   | `[t:usage]`                     |
 | `t version`                          | `--version`      | `print`                         |
 | `t commands`                         |                  | `[t:commands]`                  |
@@ -54,6 +54,11 @@ Internal helpers:
 - `[t:ITEM_CMDS]`: the commands that take an `<item>`, with their aliases.
 - `[t:AWK_SHOWN]`: awk function `shown(s)`, an item's text with `[text](http...)` links reduced to
   their text, as `[t:render]` shows it; used by `[t:item]` and `[t:complete_items]`.
+- `[t:obsidian_vaults]`: the vault directories in Obsidian's `obsidian.json` (macOS, Linux,
+  Flatpak and Snap locations), most recently opened first, read with perl's core `JSON::PP`.
+- `[t:pick_vault]`: chooses a vault for `t init`, asking only when stdin is a terminal.
+- `[t:remember_list]`, `[t:zshenv_line]`: the marked `TODO_FILE` line in `~/.zshenv` for `t init`.
+- `[t:ask]`: prints a question and reads a one-line answer; only called when stdin is a terminal.
 - `[t:pick]`: `t pick`; shows `t list` in fzf with the lock released, then finds the choice again.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
@@ -80,9 +85,25 @@ Output contracts:
 ## Invariants
 
 - **The list must exist.** Only `t init` creates it: every command except `help`, `version`,
-  `commands`, `init` and `complete` for a command without items dies when `$f` is not a file (`[t:f]` check before `check_jira`).
+  `commands`, `init` and `complete` for a command without items dies when `$f` is not a file
+  (`[t:f]` check before `check_jira`).
 - **`init` never overwrites.** `[t:init]` dies when anything, including a dangling symlink, is
-  already at `$f`. Otherwise it creates the directory (`mkdir -p`) and writes the three headings.
+  already at the target file. Otherwise it creates the directory (`mkdir -p`) and writes the three
+  headings. The one exception is a vault: `t init --obsidian` (or accepting a vault in plain
+  `t init`) uses an existing regular file there as it is.
+- **Where `init` creates the list.** `t init <path>`: at `<path>` made absolute, then shows the
+  `~/.zshenv` line for it when it isn't the list `t` uses already. `t init --obsidian`: at
+  `<vault>/Todo/Todo.md`. Plain `t init`: at `$f`, but when stdin and stdout are a terminal,
+  `TODO_FILE` is unset and Obsidian lists vaults, it first offers them.
+- **`init` asks only in a terminal.** `[t:ask]` is only reached when stdin is a terminal, so a
+  script or agent is never left waiting. Without one, `[t:pick_vault]` takes the only vault and
+  dies listing them when there are several, and `[t:remember_list]` shows the line without writing.
+- **Remembering the list.** `[t:remember_list]` writes `${ZDOTDIR:-$HOME}/.zshenv` only after a yes
+  (the default) in a terminal. It appends a marker comment plus
+  `export TODO_FILE="${TODO_FILE:-<path>}"` (`$HOME/...` when under the home directory, with
+  `\ " $` and backticks escaped), replacing an earlier marked pair and the blank lines before it,
+  and rewrites the file in place. It changes nothing when another line there mentions
+  `TODO_FILE`, or when the marked line already names this list.
 - **One run at a time.** Every command that reads the list calls `[t:lock]` before `check_jira`
   and `tidy`, and holds the lock until it exits, so reading, tidying and writing are one step.
   `[t:lock]` takes an fcntl lock (`zsystem flock`) on `$lockfile`, an empty `.<list name>.lock`
@@ -171,6 +192,8 @@ Output contracts:
 - Creates or appends to `Archive <year>.md` in the list's directory (`[t:tidy]`); reads them for
   `t list --done --all` (`[t:list_done]`).
 - Creates `$TODO_FILE` and its directory (`[t:init]`), only when nothing is there yet.
+- Reads Obsidian's `obsidian.json` (`[t:obsidian_vaults]`) and appends to or rewrites
+  `${ZDOTDIR:-$HOME}/.zshenv` (`[t:remember_list]`), both only for `t init`.
 - Creates temp files with `mktemp` and removes them before returning.
 - Runs external programs: `awk`, `date`, `cmp`, `cksum`, `cut`, `sort`, `grep`, `cat`, `mktemp`; `perl`
   when Jira linking is on (`[t:linkify]`) or stdout is a terminal (`[t:render]`); `fzf` for
