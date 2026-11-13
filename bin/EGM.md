@@ -16,10 +16,13 @@ Commands, dispatched by the two `case "$1"` blocks at the bottom of `t`:
 | `t`, `t list`                        | `ls`, `l`        | `[t:list]`                      |
 | `t list --today`, `t list --later`   |                  | `[t:list]` with a section name  |
 | `t list --done [--all]`              |                  | `[t:list_done]`                 |
+| `t list --json`                     |                  | `[t:list_json]`                 |
 | `t add [--later] <text>`             | `a`, `-l`        | `[t:add]`, `[t:insert_item]`    |
-| `t done <n>`                         | `d`              | `[t:finish]`                    |
-| `t today <n>`                        | `promote`        | `[t:move]`                      |
-| `t later <n>`                        | `demote`         | `[t:move]`                      |
+| `t done <item>`                      | `d`              | `[t:item]`, `[t:finish]`        |
+| `t today <item>`                     | `promote`        | `[t:item]`, `[t:move]`          |
+| `t later <item>`                     | `demote`         | `[t:item]`, `[t:move]`          |
+| `t rm <item>`                        | `remove`         | `[t:item]`, `[t:remove]`        |
+| `t reword <item> <text>`             |                  | `[t:item]`, `[t:reword]`        |
 | `t pick`                             | `f`              | `[t:list]`, fzf, `[t:finish]`   |
 | `t edit`                             | `e`              | `exec ${=EDITOR:-nvim} "$f"`    |
 | `t undo`                             |                  | `[t:undo]`                      |
@@ -42,6 +45,8 @@ Internal helpers:
 - `[t:save]`: rewrites the list from a temp file.
 - `[t:undo]`: restores `$bak`, keeping the current list as the new backup.
 - `[t:lock]`: takes the list's lock on `$lockfile`.
+- `[t:list_json]`: open items as JSON, built with perl so strings are escaped properly.
+- `[t:item]`: resolves an `<item>` argument (number or text) to an item number.
 - `[t:days_ago]`: date `n` days ago as `YYYY-MM-DD`, using `zsh/datetime`.
 - `[t:warn]`, `[t:die]`: print `t: <message>` to stderr; `die` exits with status 1.
 
@@ -52,7 +57,11 @@ Output contracts:
 - `t list`: one line per open item, `<n>  <section> <text>` (`printf "%3d  %-6s %s\n"`).
   `t pick` takes the item number from the first field of the chosen line.
 - `t list --done`: `<YYYY-MM-DD>  <text>`, newest first.
-- Success messages: `Added <n> (<section>): <text>`, `Done: <text>`,
+- `t list --json`: a JSON array in `t list` order, one object per line:
+  `{"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}`. `text` is the item as stored
+  (Markdown). `jira` holds the configured Jira keys in it, once each, and is empty when linking is
+  off. `[]` when there are no open items. Never rendered for a terminal.
+- Success messages: `Added <n> (<section>): <text>`, `Done: <text>`, `Removed: <text>`, `Reworded <n> (<section>): <text>`,
   `Moved to <section> as <n>: <text>`, `Created <file>`,
   `Undid the last change; run t undo again to redo it`.
 
@@ -87,9 +96,9 @@ Output contracts:
   then dies with `nothing to undo`.
 - **Startup.** `zmodload zsh/datetime zsh/system` must succeed, or `t` exits 1 before doing
   anything. `zsystem flock -i` needs zsh 5.8 or newer.
-- **`list` options.** Only `--today`, `--later`, `--done` and `--all` are accepted. `--all` needs
-  `--done`; `--done` can't be combined with `--today` or `--later`; `--today --later` together
-  list everything.
+- **`list` options.** Only `--today`, `--later`, `--done`, `--all` and `--json` are accepted.
+  `--all` needs `--done`; `--done` can't be combined with `--today`, `--later` or `--json`;
+  `--today --later` together list everything.
 - **Archive before rewriting.** `[t:tidy]` appends to every `Archive <year>.md` first and calls
   `save` only if all of those writes worked; otherwise it warns and leaves the list untidied. A
   new archive file starts with a `# Archive <year>` heading; items are appended sorted, one file
@@ -101,11 +110,21 @@ Output contracts:
   is not changed.
 - **Archive cutoff.** A Done item is archived when its date (characters 7-16 of the line) sorts
   below `days_ago 7`. If that date can't be computed, nothing is archived.
+- **Item references.** `[t:item]` turns `<item>` into a number. Only digits: used as the number
+  as is. Anything else: the arguments joined with spaces, matched case-insensitively and literally
+  (awk `index`, not a regex) against each open item's stored text, so Markdown link URLs count
+  too. Exactly one match is required; with none or several, it dies, listing the matches, and the
+  list is unchanged. It runs under the lock, so the number can't change before it's used.
 - **Item numbers.** `n` counts `- [ ] ` lines from the top of the file, across all sections.
   `[t:list]`, `[t:finish]` and `[t:move]` all count the same way; a section filter in `list` keeps
   the numbers.
 - **Item text.** `[t:add]` joins its arguments with spaces (`"$*"`), and rejects empty text and
   text containing a newline.
+- **Removing.** `[t:remove]` deletes only the line of open item `n`; done items can't be removed.
+  `t undo` restores it.
+- **Rewording.** `t reword` takes the item from its first argument only and joins the rest into
+  the new text. `[t:reword]` replaces the text of open item `n` in place, with the same checks and
+  Jira linking as `t add` (non-empty, one line).
 - **Moves.** `[t:move]` dies when item `n` doesn't exist or is already in the target section, and
   removes and re-inserts the item in a single write.
 - **Insert position.** `[t:insert_item]` appends at the end of the section, before its trailing
@@ -121,7 +140,7 @@ Output contracts:
 
 ## Side Effects
 
-- Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `pick` and
+- Rewrites `$TODO_FILE` in place (`[t:save]`), from `add`, `done`, `today`, `later`, `rm`, `reword`, `pick` and
   from `[t:tidy]` on any list command when tidying changes the list.
 - Overwrites `$bak` with the current list before every write and sets its mtime to the list's
   (`[t:save]`); deletes it after a tidy that archived (`[t:tidy]`). `t undo` restores it.

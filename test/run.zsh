@@ -172,7 +172,7 @@ check "file after moving both" "## Today
 before=$(file)
 run later 1;  check "item already in Later fails" "t: item 1 is already in Later" "$out"
 run later 9;  check "later with no such item fails" 1 "$rc"
-run later;    check "later without a number fails" "t: usage: t later <n>" "$out"
+run later;    check "later without an item fails" "t: usage: t later <item>" "$out"
 check "file unchanged after failed moves" "$before" "$(file)"
 fresh $'## Today\n- [ ] A\n\n## Done\n'
 run later 1; check "later without a Later heading fails" "t: no '## Later' heading in $TODO_FILE" "$out"
@@ -197,6 +197,124 @@ run ls --later --today; check "--today --later together list everything" "$full_
 run list --today --done; check "--today with --done fails" 1 "$rc"
 run list --later --all;  check "--later with --all fails" 1 "$rc"
 run today 3; run list --later; check "list --later when Later is empty" "" "$out"
+
+# --- items by text ---
+p7="[PROJ-7](https://jira.example.com/browse/PROJ-7)"
+fresh "## Today
+- [ ] Fix login bug
+- [ ] Write docs (v2.1)
+
+## Later
+- [ ] Fix logout PROJ-7
+
+## Done
+"
+run done write;          check "done by text" "Done: Write docs (v2.1)" "$out"
+run undo
+run done LOGIN BUG;      check "text: case-insensitive, words joined" "Done: Fix login bug" "$out"
+run undo
+run d "(v2";             check "text: matched literally, not as a pattern" "Done: Write docs (v2.1)" "$out"
+run undo
+run later docs;          check "later by text" "Moved to Later as 3: Write docs (v2.1)" "$out"
+run today logout;        check "today by text" "Moved to Today as 2: Fix logout $p7" "$out"
+run done PROJ-7;         check "a linked Jira key matches" "Done: Fix logout $p7" "$out"
+run undo; run undo; run undo   # undo, redo, undo: back to before "done PROJ-7"
+before=$(file)
+run done fix
+check "ambiguous text fails, listing the matches" "1|t: 'fix' matches 2 open items; use more of the text, or the number:
+  1  Today  Fix login bug
+  2  Today  Fix logout $p7" "$rc|$out"
+run done "f.x";          check "no match fails" "1|t: no open item matches 'f.x'" "$rc|$out"
+run done;                check "done without an item fails" "1|t: usage: t done <item>" "$rc|$out"
+run today login;         check "today: text naming a Today item" "1|t: item 1 is already in Today" "$rc|$out"
+check "file unchanged after failed references" "$before" "$(file)"
+
+# --- rm ---
+fresh "## Today
+- [ ] keep
+- [ ] old idea
+
+## Later
+- [ ] later idea
+
+## Done
+- [x] $today done item
+"
+run rm 2;          check "rm by number" "0|Removed: old idea" "$rc|$out"
+run remove later;  check "alias remove, by text" "0|Removed: later idea" "$rc|$out"
+check "rm leaves other lines alone" "## Today
+- [ ] keep
+
+## Later
+
+## Done
+- [x] $today done item" "$(file)"
+run undo;          check "rm can be undone" "- [ ] later idea" "$(grep later "$TODO_FILE")"
+before=$(file)
+run rm 9;          check "rm with no such item fails" "1|t: no open item 9" "$rc|$out"
+run rm "done item"; check "rm only takes open items" "1|t: no open item matches 'done item'" "$rc|$out"
+run rm;            check "rm without an item fails" "1|t: usage: t rm <item>" "$rc|$out"
+check "file unchanged after failed rm" "$before" "$(file)"
+
+# --- reword ---
+fresh "## Today
+- [ ] first
+- [ ] Retest logout
+
+## Later
+- [ ] third
+
+## Done
+"
+run reword 2 "Retest logout fix PROJ-9"
+check "reword by number, linking keys" "0|Reworded 2 (Today): Retest logout fix [PROJ-9](https://jira.example.com/browse/PROJ-9)" "$rc|$out"
+run reword third Plan the next release
+check "reword by text, new text from several words" "0|Reworded 3 (Later): Plan the next release" "$rc|$out"
+check "reword keeps section and position" "## Today
+- [ ] first
+- [ ] Retest logout fix [PROJ-9](https://jira.example.com/browse/PROJ-9)
+
+## Later
+- [ ] Plan the next release
+
+## Done" "$(file)"
+run undo;  check "reword can be undone" "- [ ] third" "$(grep third "$TODO_FILE")"
+before=$(file)
+run reword first;   check "reword without new text fails" "1|t: usage: t reword <item> <new text>" "$rc|$out"
+run reword;         check "reword without arguments fails" "1|t: usage: t reword <item> <new text>" "$rc|$out"
+run reword 9 x;     check "reword with no such item fails" "1|t: no open item 9" "$rc|$out"
+run reword 1 "$(printf 'two\nlines')"; check "reword to several lines fails" "1|t: item must be a single line" "$rc|$out"
+check "file unchanged after failed rewords" "$before" "$(file)"
+
+# --- list --json ---
+fresh "$EMPTY"
+run list --json;   check "json: empty list" "0|[]" "$rc|$out"
+fresh "## Today
+- [ ] Say \"hi\" \\ back"$'\t'"slash PROJ-7, again PROJ-7, and OPS-1
+
+## Later
+- [ ] Later one
+
+## Done
+- [x] $today done
+"
+jsonok() { python3 -I -c 'import json,sys; json.load(sys.stdin)' <<<"$1"; }
+run list --json
+check "json: one object per item" '[
+{"n":1,"section":"Today","text":"Say \"hi\" \\ back\u0009slash [PROJ-7](https://jira.example.com/browse/PROJ-7), again [PROJ-7](https://jira.example.com/browse/PROJ-7), and [OPS-1](https://jira.example.com/browse/OPS-1)","jira":["PROJ-7","OPS-1"]},
+{"n":2,"section":"Later","text":"Later one","jira":[]}
+]' "$out"
+jsonok "$out"; check "json: parses as JSON" 0 $?
+run list --later --json
+check "json: --later keeps the numbers" '[
+{"n":2,"section":"Later","text":"Later one","jira":[]}
+]' "$out"
+out=$(TODO_JIRA_KEYS= "$T_BIN" list --today --json); jsonok "$out"
+check "json: no jira keys with linking off" "0|1" "$?|$(grep -c '"jira":\[\]' <<<"$out")"
+out=$(python3 -I -c 'import pty,sys; pty.spawn(sys.argv[1:])' "$T_BIN" list --json </dev/null)
+[[ $out == "["* && $out != *$'\e'* ]]; check "json: plain even on a terminal" 0 $?
+run list --done --json
+check "json: not with --done" "1|t: --json lists open items; it doesn't combine with --done" "$rc|$out"
 
 # --- listing done items ---
 fresh "## Today
@@ -318,7 +436,7 @@ check "perl not needed with linking off" "Added 2 (Today): new" "$out"
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
 run commands
 check "commands exits 0 without a list" 0 "$rc"
-check "commands: one tab-separated line per command" 15 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
+check "commands: one tab-separated line per command" 18 "$(print -r -- "$out" | grep -c $'^[^\t]*\t[^\t]* e\\.g\\. t ')"
 [[ $out == *$'add ""\tadd "<text>"'*'Add an item to Today'*'e.g. t add "Retest logout fix PROJ-123"'* ]]
 check "commands: add line has insert text, description and example" 0 $?
 # every runnable insert (no placeholder) must be accepted by t

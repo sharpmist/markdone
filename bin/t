@@ -24,16 +24,23 @@ Usage:
   t [list]                  list open items, numbered          (aliases: ls, l)
   t list --today | --later  list only Today's or Later's open items (same numbers as t list)
   t list --done [--all]     list done items, newest first; --all includes the archives
+  t list --json             open items as JSON (also with --today or --later)
   t add [--later] <text>    add an item to Today, or to Later  (alias: a; -l = --later)
-  t done <n>                mark item n done                   (alias: d)
-  t today <n>               move item n from Later to Today    (alias: promote)
-  t later <n>               move item n from Today to Later    (alias: demote)
+  t done <item>             mark an item done                  (alias: d)
+  t today <item>            move an item from Later to Today   (alias: promote)
+  t later <item>            move an item from Today to Later   (alias: demote)
+  t rm <item>               remove an open item                (alias: remove)
+  t reword <item> <text>    replace an open item's text, keeping its place
   t pick                    choose an item with fzf, mark done (alias: f)
   t edit                    open the list in $EDITOR           (alias: e)
   t undo                    undo the last change; run it again to redo
   t init                    create the list with its three headings (never overwrites)
   t help                    show this help                     (-h, --help)
   t commands                list commands with examples, tab-separated (used by Tab completion)
+
+<item> is a number from t list, or text that matches exactly one open item
+(case-insensitive, any part of it), e.g. t done "logout fix".
+For reword, quote an <item> given as text with spaces: t reword "logout" "New text".
 
 Commands that read the list first tidy it: items ticked in an editor get
 today's date and move to Done; Done items older than 7 days move to
@@ -116,13 +123,16 @@ commands() {
     'list'              'list'                 'List open items, numbered'                'list' \
     'list --today'      'list --today'         "List only Today's open items"             'list --today' \
     'list --later'      'list --later'         "List only Later's open items"             'list --later' \
+    'list --json'       'list --json'          'List open items as JSON (for scripts)'    'list --json' \
     'list --done'       'list --done'          'List items done in the last 7 days'       'list --done' \
     'list --done --all' 'list --done --all'    'List all done items, incl. archives'      'list --done --all' \
     'add ""'            'add "<text>"'         'Add an item to Today'                     'add "Retest logout fix PROJ-123"' \
     'add --later ""'    'add --later "<text>"' 'Add an item to Later'                     'add --later "Clean up old branches"' \
-    'done '             'done <n>'             'Mark item n done (n from t list)'         'done 2' \
-    'today '            'today <n>'            'Move item n from Later to Today'          'today 3' \
-    'later '            'later <n>'            'Move item n from Today to Later'          'later 1' \
+    'done '             'done <item>'          'Mark an item done (number or text)'       'done "logout fix"' \
+    'today '            'today <item>'         'Move an item from Later to Today'         'today 3' \
+    'later '            'later <item>'         'Move an item from Today to Later'         'later 1' \
+    'rm '               'rm <item>'            'Remove an item (t undo brings it back)'   'rm "old idea"' \
+    'reword '           'reword <item> "<text>"' "Change an item's text"                 'reword 2 "Retest logout fix"' \
     'pick'              'pick'                 'Pick an open item with fzf, mark it done' 'pick' \
     'edit'              'edit'                 'Open the list in your editor'             'edit' \
     'undo'              'undo'                 'Undo the last change (again to redo)'     'undo' \
@@ -185,6 +195,21 @@ list() {
   awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) printf "%3d  %-6s %s\n", n, sec, substr($0,7)}' "$f" | render
 }
 
+# list_json [section]: open items as a JSON array, one object per line, in t list order:
+# {"n":1,"section":"Today","text":"...","jira":["PROJ-1"]}. text is the item as stored (Markdown).
+# jira lists the configured Jira keys in it, in order, once each; empty when linking is off. Never
+# rendered for a terminal, so the output is always plain JSON.
+list_json() {
+  awk -v only="$1" '/^## /{sec=substr($0,4)} /^- \[ \] /{n++; if (only == "" || sec == only) print n "\t" sec "\t" substr($0,7)}' "$f" |
+    T_KEYS="$JIRA_KEYS" perl -ne '
+      BEGIN { $k = join "|", map quotemeta, split " ", $ENV{T_KEYS} }
+      sub js { my $v = shift; $v =~ s/(["\\])/\\$1/g; $v =~ s/([\x00-\x1f])/sprintf "\\u%04x", ord $1/ge; "\"$v\"" }
+      chomp; my ($n, $s, $t) = split /\t/, $_, 3; my %seen;
+      my @j = $k eq "" ? () : grep { !$seen{$_}++ } $t =~ /(?<![\w\/-])((?:$k)-\d+)(?![\w-])/g;
+      push @o, sprintf q{{"n":%d,"section":%s,"text":%s,"jira":[%s]}}, $n, js($s), js($t), join ",", map { js($_) } @j;
+      END { print @o ? "[\n" . join(",\n", @o) . "\n]\n" : "[]\n" }'
+}
+
 # list_done <all>: done items as "DATE  text", newest first. Runs after tidy, so every item has a date.
 list_done() {
   local a
@@ -228,9 +253,30 @@ add() {
   fi
 }
 
+# item <command> <ref...>: print the number of the open item that ref names, for t <command>. ref is
+# a number from t list, or text matching exactly one open item: a case-insensitive substring of the
+# item as stored, so a linked Jira key matches too. Text is matched literally, not as a pattern.
+# Dies when nothing or more than one item matches, listing the matches. Called as
+# n=$(item ...) || exit, so die only ends the subshell; the lock is held all along, so the number
+# can't change before it's used.
+item() {
+  local cmd=$1 ref matches; shift; ref="$*"
+  [[ -n $ref ]] || die "usage: t $cmd <item>"
+  if [[ $ref == <-> ]]; then print -r -- "$ref"; return 0; fi
+  matches=$(T_REF="$ref" awk '
+    BEGIN { r = tolower(ENVIRON["T_REF"]) }
+    /^## / { sec = substr($0, 4) }
+    /^- \[ \] / { n++; if (index(tolower(substr($0, 7)), r)) printf "%3d  %-6s %s\n", n, sec, substr($0, 7) }
+  ' "$f") || die "could not read $f"
+  [[ -n $matches ]] || die "no open item matches '$ref'"
+  [[ $matches != *$'\n'* ]] ||
+    die "'$ref' matches ${#${(f)matches}} open items; use more of the text, or the number:"$'\n'"$matches"
+  print -r -- ${${=matches}[1]}
+}
+
 finish() {
   local n=$1 tmp out
-  [[ $n == <-> ]] || die "usage: t done <n>"
+  [[ $n == <-> ]] || die "usage: t done <item>"
   tmp=$(mktemp); out=$(mktemp)
   if awk -v N="$n" -v D="$(date +%F)" -v out="$out" '
       NR==FNR { if (/^- \[ \] / && ++c==N) item=substr($0,7); next }
@@ -246,10 +292,47 @@ finish() {
   fi
 }
 
+# remove <n>: delete open item n.
+remove() {
+  local n=$1 tmp out
+  [[ $n == <-> ]] || die "usage: t rm <item>"
+  tmp=$(mktemp); out=$(mktemp)
+  if awk -v N="$n" -v out="$out" '
+      /^- \[ \] / && ++c==N { print substr($0,7) > out; found=1; next }
+      { print }
+      END { exit !found }' "$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Removed: $(<"$out")" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no open item $n"
+  fi
+}
+
+# reword <n> <text>: replace open item n's text, keeping its section and position.
+reword() {
+  local n=$1 text=$2 tmp out
+  [[ $n == <-> && -n $text ]] || die "usage: t reword <item> <new text>"
+  [[ $text != *$'\n'* ]] || die "item must be a single line"
+  text=$(print -r -- "$text" | linkify all) || die "Jira linking failed (is perl installed?); nothing changed"
+  tmp=$(mktemp); out=$(mktemp)
+  if T_TEXT="$text" awk -v N="$n" -v out="$out" '
+      /^## / { sec = substr($0, 4) }
+      /^- \[ \] / && ++c==N { print "- [ ] " ENVIRON["T_TEXT"]; print c " (" sec ")" > out; found=1; next }
+      { print }
+      END { exit !found }' "$f" >"$tmp"; then
+    save "$tmp" "$out"
+    print -r -- "Reworded $(<"$out"): $text" | render
+    rm -f "$tmp" "$out"
+  else
+    rm -f "$tmp" "$out"; die "no open item $n"
+  fi
+}
+
 # move <section> <command> <n>: move open item n to the end of <section> (Today or Later), in one write.
 move() {
   local to=$1 cmd=$2 n=$3 found sec item tmp out
-  [[ $n == <-> ]] || die "usage: t $cmd <n>"
+  [[ $n == <-> ]] || die "usage: t $cmd <item>"
   found=$(awk -v N="$n" '/^## /{sec=substr($0,4)} /^- \[ \] / && ++c==N {print sec "\t" substr($0,7); exit}' "$f")
   [[ -n $found ]] || die "no open item $n"
   sec=${found%%$'\t'*}; item=${found#*$'\t'}
@@ -321,29 +404,37 @@ tidy
 case "$1" in
   ""|list|ls|l)
     (( $# )) && shift
-    show_done=0; show_all=0; show_today=0; show_later=0
+    show_done=0; show_all=0; show_today=0; show_later=0; show_json=0
     for opt in "$@"; do
       case $opt in
         --done) show_done=1 ;;
         --all) show_all=1 ;;
         --today) show_today=1 ;;
         --later) show_later=1 ;;
-        *) die "unknown option '$opt' for list (expected --today, --later, --done, --all)" ;;
+        --json) show_json=1 ;;
+        *) die "unknown option '$opt' for list (expected --today, --later, --done, --all, --json)" ;;
       esac
     done
     (( show_all && !show_done )) && die "--all only works together with --done"
     (( show_done && (show_today || show_later) )) && die "--today and --later list open items; they don't combine with --done"
+    (( show_done && show_json )) && die "--json lists open items; it doesn't combine with --done"
+    sec=
+    (( show_today && !show_later )) && sec=Today
+    (( show_later && !show_today )) && sec=Later
     if (( show_done )); then list_done $show_all
-    elif (( show_today && !show_later )); then list Today
-    elif (( show_later && !show_today )); then list Later
-    else list
+    elif (( show_json )); then list_json "$sec"
+    else list "$sec"
     fi ;;
   add|a)
     shift
     if [[ $1 == (--later|-l) ]]; then shift; add Later "$*"; else add Today "$*"; fi ;;
-  done|d) finish "$2" ;;
-  today|promote) move Today today "$2" ;;
-  later|demote)  move Later later "$2" ;;
+  done|d)       n=$(item done "${@:2}") || exit; finish "$n" ;;
+  today|promote) n=$(item today "${@:2}") || exit; move Today today "$n" ;;
+  later|demote)  n=$(item later "${@:2}") || exit; move Later later "$n" ;;
+  rm|remove)      n=$(item rm "${@:2}") || exit; remove "$n" ;;
+  reword)
+    [[ -n $2 && -n ${*:3} ]] || die "usage: t reword <item> <new text>"
+    n=$(item reword "$2") || exit; reword "$n" "${*:3}" ;;
   pick|f)
     pick=$(list | fzf --prompt='done> ') || exit
     finish "$(awk '{print $1}' <<<"$pick")" ;;
