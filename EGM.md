@@ -18,6 +18,10 @@ The only coupling between the two components is the output of `t commands` and
 - shell: [`./shell/EGM.md`](./shell/EGM.md) - `t.zsh`, Tab completion for interactive zsh, fed by
   `t commands` and `t complete <command>`.
 - test: `run.zsh`, the test suite (no contract file; test-only directory).
+- `install` (repository root, no contract file): links `bin/t` into `~/.local/bin` (or `--bin`)
+  and appends a marked `source .../shell/t.zsh` line to `${ZDOTDIR:-$HOME}/.zshrc` when fzf is
+  installed; `--uninstall` removes exactly those. It never replaces an existing `t`, never touches
+  the list, and only warns about a `t` alias or function in `~/.zshrc`.
 
 ## Global Invariants
 
@@ -44,6 +48,7 @@ The only coupling between the two components is the output of `t commands` and
 - The list file at `$TODO_FILE` (default `~/todo/Todo.md`) is rewritten in place.
 - `Archive <year>.md` files are created and appended to in the list's directory.
 - Sourcing `shell/t.zsh` rebinds Tab in the interactive zsh session.
+- `./install` creates a symlink `~/.local/bin/t` and appends two lines to `~/.zshrc`; only when run.
 - A hidden backup, `.<list name>.bak`, next to the list holds the list as it was before `t`'s last
   write. `t undo` restores it, but only while the list still matches the checksum of `t`'s last
   write, kept in `.<list name>.sum`.
