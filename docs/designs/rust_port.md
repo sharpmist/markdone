@@ -1,7 +1,7 @@
 # Port `t` to Rust
 
 *   **Author:** sharpmist
-*   **Status:** Proposed
+*   **Status:** Implemented (notes on how the implementation differs: [Implementation notes](#implementation-notes))
 *   **Date:** 2026-11-14
 
 --------------------------------------------------------------------------------
@@ -154,7 +154,7 @@ only calls the others.
 | `src/store.rs` | `save`, `undo`, the archive loop in `tidy`, `cksum` | Reading a list, writing it with backup and checksum, undo, appending to archives. |
 | `src/init.rs` | `init`, `obsidian_vaults`, `pick_vault`, `ask`, `remember_list`, `zshenv_line` | Creating a list, finding Obsidian vaults, prompts, writing the config file. |
 | `src/complete.rs` | `commands`, `complete_cmd`, `ITEM_CMDS` | The command table and what Tab offers. |
-| `src/pick.rs` | `pick`, the fzf call in `use_cmd` | Finding and running fzf. |
+| `src/pick.rs` | `pick`, the fzf call in `use_cmd` | Finding programs on `PATH`, running fzf, finding the item `pick` chose again. (The `pick` flow itself is in `main.rs`, which holds the run's locks.) |
 
 ### Dependencies
 
@@ -191,11 +191,11 @@ only calls the others.
 The order of 0.3.0, kept because tests and users depend on it:
 
 1.  A first argument `@<list>` is taken off. An empty name is an error (as in 0.3.0).
-2.  Commands that need no list: `help`, `-h`, `--help`, `version`, `--version`, `commands`,
-    `init`, `lists`, `use`, and `complete` unless it offers a list's items. `init`, `lists` and
-    `use` with `@<list>` are an error.
-3.  The settings are loaded (see [Configuration](#configuration)), and the upgrade warning is
-    printed when it applies.
+2.  Commands that need no settings: `help`, `-h`, `--help`, `version`, `--version`, `commands`.
+    `init`, `lists` and `use` with `@<list>` are an error.
+3.  The settings are loaded (see [Configuration](#configuration)), with their warnings and the
+    upgrade warning. Then the commands that need no list run: `init`, `lists`, `use`, and
+    `complete` unless it offers a list's items.
 4.  The list is chosen (`@<list>`, else **Which list**). Its file must exist.
 5.  For `move`, the target list is found.
 6.  Old archives are migrated (see **Old archives**), under the default list's lock.
@@ -582,7 +582,33 @@ under the home directory):
 | Bad list name | `t: '<name>' can't be a list name (no / \ : * ? " < > \|, no control characters, no leading . or @, no trailing dot, space or .md, not a Windows device name like CON)` (exit 1) |
 | `install`: no cargo | `install: cargo isn't installed; get Rust from https://rustup.rs and run ./install again` (exit 1) |
 | `install`: build failed | `install: cargo build failed; see the messages above` (exit 1) |
+| `install --no-build` without a build | `install: <clone>/target/release/t isn't built; run ./install without --no-build` (exit 1) |
+| `t init` saving with no `APPDATA` (Windows) | `t: APPDATA isn't set, so there's no config file to save to; set TODO_FILE to <file>` (exit 1) |
 | `install`: last line (stdout) | `Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first). After a git pull, run ./install again to rebuild t.` |
+
+## Implementation notes
+
+What turned out differently from the plan above while it was built (steps S1 to S13, issues #14
+to #26). The sections above have been brought in line; these notes record why.
+
+*   **One lock per file per run is real, not theoretical.** A second `try_lock` on the same file
+    from the same process waits, on macOS, Linux and Windows alike (tested in `lock.rs`), so
+    `main.rs` keeps the run's locks in one place (`Locks`).
+*   **fcntl and flock on macOS** exclude each other; on Linux they don't. The zsh suite's lock
+    probes therefore had to match the implementation under test until `bin/t` was removed.
+*   **A latent race in `test/run.zsh`:** zpty sessions are forks of the suite and inherited its
+    cleanup trap, so one ending could delete temporary folders the suite still used. It showed
+    once the lock helpers lived in such a folder; the trap now runs only in the suite's own
+    process.
+*   **Settings before `init`, `lists`, `use` and `complete`.** Those commands need `TODO_FILE`, so
+    the settings are loaded right after `help`, `version` and `commands` (see [Dispatch](#dispatch)).
+*   **`pick`'s flow is in `main.rs`**, since it releases and retakes the run's locks; `pick.rs` has
+    the parts that don't need them.
+*   **Checks removed without a replacement:** the four "perl failure" checks (no perl), the three
+    `~/.zshenv` checks (zsh only; `tests/config.rs` covers the config file), and two unit tests
+    that compared text with `bin/t`.
+*   **Console styling on Windows** (escape-sequence mode) is the one platform difference CI can't
+    check: the runner has no console.
 
 ## Alternatives Considered
 
@@ -824,9 +850,10 @@ under the home directory):
 #### 12. `src/pick.rs` (Create)
 
 *   **Steps**: S9.
-*   **Proposed Changes**: Finding fzf; `pick` (release the lock, run fzf with 0.3.0's arguments
-    on the unstyled list, lock, tidy, find the item again by its stored text); the chooser for
-    `t use` alone.
+*   **Proposed Changes**: Finding fzf and editors on `PATH`; running fzf; finding the item `pick`
+    chose again by its stored text. `main.rs` runs the flow (release the lock, run fzf with
+    0.3.0's arguments on the unstyled list, lock, tidy, find the item, finish) and the chooser
+    for `t use` alone.
 
 #### 13. `tests/` (Create)
 
@@ -851,14 +878,14 @@ under the home directory):
         `t`, with a safety check that the config file used is inside it.
     *   S8: config-file checks (`impl=rust`) beside the `~/.zshenv` and `t init` checks
         (`impl=zsh`); the perl-failure checks run only for `impl=zsh`.
-    *   S9: the lock helpers (`hold` and the probes in the edit and pick checks) use
-        `python3 -c 'import fcntl; fcntl.lockf(...)'` for `impl=zsh` and `fcntl.flock` for
-        `impl=rust`; "pick without fzf" no longer links awk and perl into its `PATH` for
-        `impl=rust`.
+    *   S9: the lock helpers (`hold` and the probes in the edit and pick checks) take the lock the
+        way the t under test does: zsh's `zsystem flock` (fcntl) for `impl=zsh`, python's
+        `fcntl.flock` for `impl=rust`.
     *   S11: the sections moved to `tests/*.rs` are deleted.
     *   S12: the `impl=zsh` checks are deleted; `T_BIN` defaults to `$repo/target/debug/t`,
-        and the suite stops with a message when it isn't built; `install` checks use
-        `--no-build` with a binary built beforehand.
+        and the suite stops with a message when it isn't built; the `install` checks run a copy
+        of `install` in a throwaway folder with a fake `cargo` on `PATH`, so they cover the build
+        step without a real build.
 
 #### 15. `install` (Modify)
 
