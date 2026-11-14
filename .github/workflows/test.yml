@@ -80,6 +80,27 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  # The parity gate: 0.3.0's suite, test/run.zsh, against the Rust binary (docs/designs/rust_port.md,
+  # step S9). Needs zsh and python3, so macOS and Linux only.
+  parity:
+    name: Parity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh
+      - name: Build
+        run: cargo build --locked
+      - name: Run test/run.zsh against the Rust binary
+        run: T_BIN="$PWD/target/debug/t" test/run.zsh
+
   # The oldest Rust the port supports (rust-version in Cargo.toml).
   msrv:
     name: Rust 1.89 (ubuntu-latest)

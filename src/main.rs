@@ -1,7 +1,6 @@
 //! t: personal todo lists kept as Markdown files, one file per list, in one folder.
 //!
-//! The Rust port of the zsh script `bin/t`; see `docs/designs/rust_port.md`. `init`, `pick`,
-//! `edit` and `use` without a name arrive in later steps (S8, S9).
+//! The Rust port of the zsh script `bin/t`; see `docs/designs/rust_port.md`.
 
 mod complete;
 mod config;
@@ -10,12 +9,13 @@ mod init;
 mod jira;
 mod lists;
 mod lock;
+mod pick;
 mod store;
 mod text;
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -552,12 +552,125 @@ fn run() -> R {
             &run.doc,
             &complete_cmd.expect("set above"),
         )),
-        b"pick" | b"f" => die("t pick isn't in the Rust port yet; use bin/t"),
-        b"edit" | b"e" => die("t edit isn't in the Rust port yet; use bin/t"),
+        b"pick" | b"f" => pick_cmd(&run, &mut locks, &cutoff),
+        b"edit" | b"e" => edit(run.list.file(), locks),
         _ => {
             eprintln!("t: unknown command '{}'", lossy(&cmd));
             eprint!("{USAGE}");
             Err(Fail::Exit(1))
+        }
+    }
+}
+
+/// `t pick`: chooses an open item with fzf and marks it done. fzf can stay open for as long as
+/// you like, so the lock is released while it is and other runs (an agent's `t add`) aren't kept
+/// waiting. Then it locks and tidies again and finds the chosen item by its stored text, since
+/// numbers may have shifted meanwhile; if it's no longer clear which item was meant, or the item
+/// is gone, nothing changes.
+fn pick_cmd(run: &Run, locks: &mut Locks, cutoff: &str) -> R {
+    let fzf = pick::fzf().ok_or("t pick needs fzf (https://github.com/junegunn/fzf)")?;
+    // What fzf shows is t list as printed to a pipe: no list name, no link escapes.
+    let rows = run.doc.rows(None);
+    if rows.is_empty() {
+        return die("no open items to pick");
+    }
+    let snapshot = run.doc.clone();
+    locks.release(&run.list.lock);
+    let choice = pick::run_fzf(&fzf, &["--prompt=done> "], &rows)?;
+    if choice.status != 0 {
+        return Err(Fail::Exit(choice.status.clamp(1, 255) as u8));
+    }
+    let first = choice
+        .line
+        .split(|b| text::is_ascii_space(*b))
+        .find(|w| !w.is_empty())
+        .unwrap_or_default();
+    let Some(n) = doc::number(first) else {
+        return die(format!(
+            "could not read the item number from fzf's output: {}",
+            lossy(&choice.line)
+        ));
+    };
+    let Ok(item) = snapshot.take(n) else {
+        return die(format!(
+            "could not find item {n} in the list as fzf showed it"
+        ));
+    };
+    locks.take(&run.list.lock)?;
+    let doc = tidy(&run.lists, &run.list, &run.today, cutoff, run.jira.as_ref())?;
+    let shown = lossy(&item.text);
+    let n = match pick::find_again(&doc, n, &item.text) {
+        pick::Found::Item(n) => n,
+        pick::Found::Gone => {
+            return die(format!(
+                "'{shown}' is no longer an open item; it was changed while fzf was open, so nothing is done"
+            ));
+        }
+        pick::Found::Ambiguous(m) => {
+            return die(format!(
+                "'{shown}' now matches {m} open items; run t pick again"
+            ));
+        }
+    };
+    let mut doc = doc;
+    let text = doc
+        .finish(n, &run.today)
+        .map_err(|_| format!("no open item {n} (or no '## Done' heading)"))?;
+    run.save(&run.list, &doc)?;
+    run.print(&[b"Done: ", text.as_slice()].concat())
+}
+
+/// The editor command: `EDITOR`, or the default (`nvim`; `notepad` on Windows) when it is unset
+/// or empty. When the whole value names an existing file, that is the program (so a path with
+/// spaces works); otherwise it is split at spaces, tabs and newlines, like zsh's `${=EDITOR}`.
+fn editor_command() -> Vec<OsString> {
+    let default = if cfg!(windows) { "notepad" } else { "nvim" };
+    let value = std::env::var_os("EDITOR").filter(|v| !v.is_empty());
+    let Some(value) = value else {
+        return vec![default.into()];
+    };
+    if Path::new(&value).is_file() {
+        return vec![value];
+    }
+    let words: Vec<OsString> = os_bytes(&value)
+        .split(|b| matches!(b, b' ' | b'\t' | b'\n'))
+        .filter(|w| !w.is_empty())
+        .map(|w| config::bytes_path(w).into_os_string())
+        .collect();
+    if words.is_empty() {
+        vec![default.into()]
+    } else {
+        words
+    }
+}
+
+/// `t edit`: opens the list in the editor. On Unix `t` becomes the editor (`exec`), which closes
+/// the lock's file, so the editor never holds it. Windows has no `exec`: the lock is released,
+/// the editor started, and `t` exits with its status.
+fn edit(file: &Path, locks: Locks) -> R {
+    let words = editor_command();
+    let program = PathBuf::from(&words[0]);
+    let cant = || format!("could not run the editor '{}'", program.display());
+    let mut command =
+        std::process::Command::new(pick::find_program(&program).unwrap_or(program.clone()));
+    command.args(&words[1..]).arg(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let _ = locks;
+        let _error = command.exec();
+        eprintln!("t: {}", cant());
+        Err(Fail::Exit(127))
+    }
+    #[cfg(windows)]
+    {
+        drop(locks);
+        match command.status() {
+            Ok(status) => Err(Fail::Exit(pick::status_code(&status).clamp(0, 255) as u8)),
+            Err(_) => {
+                eprintln!("t: {}", cant());
+                Err(Fail::Exit(127))
+            }
         }
     }
 }
@@ -715,18 +828,45 @@ fn lists_cmd(lists: &Lists, settings: &Settings, a: &[Vec<u8>]) -> R {
     }
 }
 
-/// `t use <list>` (`t use` alone, with fzf, arrives in step S9).
+/// `t use <list>`; `t use` alone picks the list with fzf, in a terminal.
 fn use_cmd(lists: &Lists, settings: &Settings, a: &[Vec<u8>]) -> R {
     if a.len() > 1 {
         return die("usage: t use <list>");
     }
-    let Some(name) = a.first() else {
-        return die(
-            "usage: t use <list> (in a terminal with fzf, t use alone picks one); t lists shows them",
-        );
+    let todo_list = settings.todo_list.as_deref();
+    let chosen;
+    let name = match a.first() {
+        Some(name) => name,
+        None => {
+            let fzf = pick::fzf()
+                .filter(|_| io::stdin().is_terminal() && io::stdout().is_terminal())
+                .ok_or(
+                    "usage: t use <list> (in a terminal with fzf, t use alone picks one); t lists shows them",
+                )?;
+            let current = lists.current(todo_list, &mut Vec::new())?;
+            let lines = lists.show(&current).map(|_| lists.lines(&current, true))?;
+            let choice = pick::run_fzf(
+                &fzf,
+                &[
+                    "--height=40%",
+                    "--reverse",
+                    "--delimiter=\t",
+                    "--with-nth=2",
+                    "--prompt=use> ",
+                    "--header=Pick the list to use (Esc cancels)",
+                ],
+                &lines,
+            )?;
+            if choice.status != 0 {
+                return Err(Fail::Exit(choice.status.clamp(1, 255) as u8));
+            }
+            let tab = choice.line.iter().position(|&b| b == b'\t');
+            chosen = choice.line[..tab.unwrap_or(choice.line.len())].to_vec();
+            &chosen
+        }
     };
     let mut warnings = Vec::new();
-    let message = lists.use_list(name, settings.todo_list.as_deref(), &mut warnings)?;
+    let message = lists.use_list(name, todo_list, &mut warnings)?;
     out_line(message.as_bytes())?;
     warn_all(&mut warnings);
     Ok(())

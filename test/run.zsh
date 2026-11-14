@@ -21,7 +21,11 @@ check() { # <name> <expected> <actual>
   else (( fail++ )); print -r -- "FAIL: $1"; print -r -- "  expected: ${(q+)2}"; print -r -- "  actual:   ${(q+)3}"; fi
 }
 run() { out=$("$T_BIN" "$@" 2>&1); rc=$?; }  # sets $out and $rc
-dirs=(); trap 'chmod -R u+w $dirs 2>/dev/null; rm -rf $dirs' EXIT
+# Temp dirs are removed when the suite exits, by this process only: zpty sessions are forks of it
+# that inherit the trap, and when they end they must not delete the dirs the suite still uses.
+zmodload zsh/system
+suite_pid=$sysparams[pid]
+dirs=(); trap '(( sysparams[pid] == suite_pid )) && { chmod -R u+w $dirs 2>/dev/null; rm -rf $dirs; }' EXIT
 # bin/t runs under zsh, which reads $ZDOTDIR/.zshenv (default ~/.zshenv) on every start. Point it at
 # an empty dir so the user's TODO_* settings can't override the test's, or send t to the real list.
 export ZDOTDIR=$(mktemp -d); dirs+=$ZDOTDIR
@@ -696,11 +700,39 @@ out=$(EDITOR="echo opened" "$T_BIN" edit 2>&1)
 check "EDITOR with arguments" "opened $TODO_FILE" "$out"
 
 # --- locking ---
+# Two helpers that lock like the t under test: bin/t takes an fcntl lock (zsystem flock), the
+# Rust t a flock lock, and on Linux the two don't see each other.
+#   $lockbin/trylock <lock file>: prints "free" when the lock can be taken, else "held"
+#   $lockbin/holdlock <lock file> <ready file> <hundredths of a second>: holds it, touching the
+#     ready file once it does
+lockbin=$(mktemp -d); dirs+=$lockbin
+if [[ $impl == zsh ]]; then
+  print -r -- '#!/bin/sh
+exec zsh -fc '\''zmodload zsh/system; zsystem flock -t 0 -f fd "$1" 2>/dev/null && echo free || echo held'\'' x "$1"' >"$lockbin/trylock"
+  print -r -- '#!/bin/sh
+exec zsh -fc '\''zmodload zsh/system zsh/zselect; : >>"$1"; zsystem flock -f fd "$1" && : >"$2" && zselect -t $3'\'' x "$@"' >"$lockbin/holdlock"
+else
+  print -r -- '#!/bin/sh
+exec python3 -I -c '\''
+import fcntl, sys
+f = open(sys.argv[1], "a")
+try:
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); print("free")
+except OSError:
+    print("held")
+'\'' "$1"' >"$lockbin/trylock"
+  print -r -- '#!/bin/sh
+exec python3 -I -c '\''
+import fcntl, sys, time
+f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); open(sys.argv[2], "w").close()
+time.sleep(int(sys.argv[3]) / 100)
+'\'' "$@"' >"$lockbin/holdlock"
+fi
+chmod +x "$lockbin/trylock" "$lockbin/holdlock"
 lock_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.lock"; }
 hold() { # <hundredths of a second>: hold the list's lock from another process; sets $holder
   local ready="${TODO_FILE:h}/held"
-  zsh -fc 'zmodload zsh/system zsh/zselect
-    : >>"$1"; zsystem flock -f fd "$1" && : >"$2" && zselect -t $3' x "$(lock_of)" "$ready" $1 &
+  "$lockbin/holdlock" "$(lock_of)" "$ready" $1 &
   holder=$!
   until [[ -e $ready ]]; do zselect -t 1; done
   rm -f "$ready"
@@ -724,10 +756,9 @@ run add freed; check "lock of a killed process is free at once" "0|Added 2 (Toda
 # t edit execs the editor, which closes the lock's descriptor. The editor checks from a child
 # process: the editor process itself (t after exec) could always relock a lock it still held.
 fresh "$EMPTY"
-cat >"$dir/editor" <<'EOS'
+cat >"$dir/editor" <<EOS
 #!/bin/sh
-zsh -fc 'zmodload zsh/system; zsystem flock -t 0 -f fd "$1" 2>/dev/null && echo free || echo held' x \
-  "$(dirname "$1")/.$(basename "$1").lock"
+"$lockbin/trylock" "\$(dirname "\$1")/.\$(basename "\$1").lock"
 EOS
 chmod +x "$dir/editor"
 out=$(EDITOR="$dir/editor" "$T_BIN" edit 2>&1)
@@ -751,7 +782,7 @@ printf '%s\n' "$input" | grep -m1 -F -- "$PICK"
 EOS
 chmod +x "$fakebin/fzf"
 run_pick() { # <text of the line to pick> [command to run while fzf is open]
-  out=$(PATH="$fakebin:$PATH" T_BIN="$T_BIN" T_LOCK="$(lock_of)" PICK="$1" PICK_DURING="$2" \
+  out=$(PATH="$fakebin:$PATH" T_BIN="$T_BIN" T_LOCK="$(lock_of)" T_TRYLOCK="$lockbin/trylock" PICK="$1" PICK_DURING="$2" \
     "$T_BIN" pick 2>&1); rc=$?
 }
 ABC=$'## Today\n- [ ] A\n- [ ] B\n\n## Later\n- [ ] C\n\n## Done\n'
@@ -759,7 +790,7 @@ fresh "$ABC"
 run_pick B; check "pick marks the chosen item done" "0|Done: B" "$rc|$out"
 
 fresh "$ABC"
-run_pick C 'zsh -fc '\''zmodload zsh/system; zsystem flock -t 0 -f fd "$1" && echo free || echo held'\'' x "$T_LOCK" >"$T_LOCK.state"; "$T_BIN" rm A'
+run_pick C '"$T_TRYLOCK" "$T_LOCK" >"$T_LOCK.state"; "$T_BIN" rm A'
 check "pick: the lock is free while fzf is open" free "$(<"$(lock_of).state")"
 check "pick: numbers shifted while fzf was open" "0|Done: C" "$rc|$out"
 check "pick: the other run's change is kept" $'## Today\n- [ ] B\n\n## Later\n\n## Done\n'"- [x] $today C" "$(file)"

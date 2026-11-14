@@ -7,9 +7,8 @@ It is built module by module; until step S12 of the design, the zsh script `bin/
 command people use, and [`../bin/EGM.md`](../bin/EGM.md) its contract. This file grows with each
 step and describes only what exists in `src/` so far.
 
-The binary `t` implements every command of 0.3.0 except `pick`, `edit` and `use` without a name,
-which print `t: t <command> isn't in the Rust port yet; use bin/t` (or, for `use`, 0.3.0's usage
-message) and exit 1 until step S9.
+The binary `t` implements every command of 0.3.0, and passes 0.3.0's test suite (`test/run.zsh`)
+on macOS and Linux, apart from the checks of what the design changes.
 
 ## Interface
 
@@ -28,6 +27,9 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 | `t add [--later] <text>`, `done`, `today`, `later`, `rm`, `reword` | `[main:run]` with `[doc:Doc]` |
 | `t move <item> @<list>` | `[main:run]`: both lists locked in path order and tidied |
 | `t undo` | `[store:undo]`, before tidy |
+| `t pick` | `[main:pick_cmd]`, `[pick:run_fzf]`, `[pick:find_again]` |
+| `t edit` | `[main:edit]` |
+| `t use` (no name) | `[main:use_cmd]` with fzf |
 | `t @<list> <command>` | the command on that list (`[lists:Lists::find]`) |
 
 - `[main:USAGE]`: 0.3.0's usage text, identical to `bin/t`'s (a unit test compares them).
@@ -44,6 +46,14 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 - `[init:init]`: `t init`, `t init <path>`, `t init --obsidian`.
 - `[init:obsidian_vaults]`: the vaults in Obsidian's `obsidian.json` (macOS, Linux, Flatpak,
   Snap and Windows locations), most recently opened first.
+
+### `pick.rs`: fzf and programs on `PATH`
+
+- `[pick:find_program]`: the file a program name runs: the first match on `PATH`, with each
+  `PATHEXT` extension on Windows.
+- `[pick:fzf]`, `[pick:run_fzf]` (`[pick:Choice]`): finding and running fzf; its status as a
+  shell reports it (`[pick:status_code]`).
+- `[pick:find_again]` (`[pick:Found]`): the item `t pick` chose, found again by its text.
 
 ### `complete.rs`: Tab completion data
 
@@ -177,6 +187,18 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
   directory) replaces the config file's last `TODO_FILE` line, or is appended; other lines stay;
   the file is written in place. When the config already names the list, nothing is asked. When
   `TODO_FILE` is set in the environment to something else, a warning says it still wins.
+- **Picking.** `t pick` needs fzf (found first, else 0.3.0's message) and an open item. fzf gets
+  the unstyled `t list` rows; the list's lock is released while it is open. A cancelled fzf ends
+  the run with fzf's status. Then the lock is taken again, the list tidied again, and the chosen
+  item found by its exact text: at the chosen number if unchanged, else the only open item with
+  that text; none, or several and none at the number, stops with 0.3.0's messages.
+- **`t use` alone** needs a terminal on stdin and stdout and fzf; it offers the `t lists` lines
+  and passes fzf's status through when cancelled.
+- **Editing.** The editor is `EDITOR` (empty or unset: `nvim`, `notepad` on Windows); a value
+  naming an existing file is the program, otherwise it is split at spaces, tabs and newlines.
+  On Unix `t` execs it after tidying, which closes the lock's file; on Windows `t` releases the
+  lock, waits for the editor and exits with its status. An editor that can't be started:
+  `t: could not run the editor '<program>'`, exit 127.
 - **Bytes.** `doc.rs` works on bytes; only matching decodes them (invalid UTF-8 as U+FFFD).
 - **Lines.** Split at LF; a CR before the LF is the line's ending, not its content. An empty file
   has no lines. A leading UTF-8 byte order mark belongs to no line and is written back. The
@@ -271,5 +293,5 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 - Run: `cargo test`: unit tests in each module, and integration tests in `../tests/` that run
   the built `t` in a sandbox (`../tests/common/mod.rs`) whose home directory, config folders and
   lists are all inside a temporary directory, with the environment cleared.
-- Also run `T_BIN=$PWD/target/debug/t test/run.zsh` (0.3.0's suite against the Rust binary); it
-  must pass from step S9 on.
+- Also run `T_BIN=$PWD/target/debug/t test/run.zsh` (0.3.0's suite against the Rust binary, on
+  macOS and Linux); it must end with `N passed, 0 failed`. CI runs it as the parity job.
