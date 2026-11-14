@@ -12,6 +12,10 @@ mod doc;
 #[allow(dead_code)]
 mod jira;
 #[allow(dead_code)]
+mod lock;
+#[allow(dead_code)]
+mod store;
+#[allow(dead_code)]
 mod text;
 
 use std::io::{self, Write};

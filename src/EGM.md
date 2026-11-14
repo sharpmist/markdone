@@ -59,6 +59,20 @@ So far the binary `t` implements `help` and `version`. Every other command print
 - `[doc:Error]`: why a change can't be made; callers turn it into 0.3.0's messages.
 - `[doc:row]` (`printf "%3d  %-6s %s"`), `[doc:number]`, `[doc:done_rows]` (`t list --done`).
 
+### `lock.rs`: one run at a time
+
+- `[lock:take]`: the lock on a lock file (`[lock:What]`: a list's or the lists folder's), waiting
+  up to 10 s, checking every 0.05 s. `[lock:Lock]` holds it until dropped or the process ends.
+
+### `store.rs`: saving, undo, archives
+
+- `[store:Files]`: a list's file, backup and checksum file.
+- `[store:save]`: rewrites a list with backup and checksum.
+- `[store:undo]`: restores the backup when the list still matches the checksum.
+- `[store:archive]`, `[store:archive_file]`: appends archived lines to `<list> <year>.md`.
+- `[store:archived_items]`: the done items of a list's archives, for `t list --done --all`.
+- `[store:cksum]`, `[store:cksum_line]`: the POSIX `cksum` value and line.
+
 ### `config.rs`: settings
 
 - `[config:load]`: the settings of this run (`[config:Settings]`): `todo_file` and where it came
@@ -107,6 +121,22 @@ So far the binary `t` implements `help` and `version`. Every other command print
   changes.
 - **Item references.** Digits only are a number (leading zeros allowed); other text must be a
   case-insensitive, literal substring of exactly one open item's text as a terminal shows it.
+- **Locks.** The lock file is opened for reading and writing, created empty when missing, never
+  truncated. A lock belongs to an open handle, not to the process: a run must hold at most one
+  lock per lock file, since a second handle waits and fails. Messages are 0.3.0's
+  (`could not create the lock file …`, `another t has been using the list …`,
+  `another t has been changing the lists …`, `could not lock …`).
+- **Writes go through `save`.** It reads the current list and writes it to the backup (created
+  0600 on Unix); if that fails, nothing is written. It then writes the list in place (truncate and
+  write, never rename), then `<crc> <length>` and LF to the checksum file (0600 on Unix); if only
+  that fails, it deletes the checksum file and warns. Messages are 0.3.0's.
+- **Undo.** Restores the backup byte for byte through `save` only when the list's `cksum` line
+  equals the stored one (both trimmed); a second undo redoes. The format is 0.3.0's, so its
+  backups and checksums work.
+- **Archives.** One file per list and year of the item's date, `# <list> archive <year>` and a
+  blank line when new; each year's lines appended sorted by bytes, with the archive's own line
+  ending (a new one takes the list's). The first file that can't be written stops archiving and
+  is reported, so the caller leaves the list as it was.
 - **Settings sources.** `TODO_FILE`, `TODO_JIRA_KEYS` and `TODO_JIRA_URL` come from the
   environment variable when it is set, else the config file, else the default. An empty
   environment value stops the lookup and means the default (`~/todo/Todo.md`; Jira linking
@@ -127,6 +157,9 @@ So far the binary `t` implements `help` and `version`. Every other command print
 ## Side Effects
 
 - `[config:load]` reads the environment and the config file; it never writes.
+- `[lock:take]` creates empty lock files and holds locks on them.
+- `[store:save]` writes the list, its backup and its checksum file; `[store:undo]` the same;
+  `[store:archive]` creates the archive folder and creates or appends to archive files.
 - `[text:styled_stdout]` on Windows may switch the console to escape-sequence mode.
 - `[main:out]` writes to stdout; errors and warnings go to stderr.
 
