@@ -11,7 +11,8 @@ agents can both use safely.
   file.
 - **Safe to share.** Runs from you and your agents take turns, every change is backed up first,
   and `t undo` reverses the last one.
-- **Small.** One zsh script using awk and perl, for macOS and Linux. fzf is optional.
+- **Small.** One program, for macOS, Linux and Windows, with nothing else to install. fzf is
+  optional.
 
 ## A quick look
 
@@ -154,14 +155,15 @@ Archives from before there were several lists (`Archive 2026.md` next to the lis
 
 ## Requirements
 
-- macOS or Linux.
-- zsh 5.8 or newer (with its standard `zsh/datetime` and `zsh/system` modules), awk and perl.
-- Optional: [fzf](https://github.com/junegunn/fzf) for `t pick` and Tab completion. The Tab
+- macOS, Linux or Windows.
+- To build it: [Rust](https://rustup.rs) 1.89 or newer (or take a release binary, see below).
+- Optional: [fzf](https://github.com/junegunn/fzf) for `t pick` and `t use` alone.
+- Optional, macOS and Linux: zsh, for `./install` and [Tab completion](#tab-completion-zsh). The Tab
   completion setup below uses `fzf --zsh`, which needs fzf 0.48 or newer.
 
 ## Install
 
-Clone the repo anywhere and run `./install`:
+On macOS or Linux, clone the repo anywhere and run `./install`:
 
 ```sh
 git clone https://github.com/sharpmist/markdone.git
@@ -169,57 +171,76 @@ cd markdone
 ./install
 ```
 
-`./install` does two things, and says what it did:
+`./install` does three things, and says what it did:
 
-- It links `bin/t` into `~/.local/bin` (`--bin <dir>` picks another directory), and warns if that
-  directory isn't on your `PATH`. It's a link, so a `git pull` in the clone updates `t`.
+- It builds `t` (`cargo build --release`; `--no-build` skips this and links what's built).
+- It links the built `t` into `~/.local/bin` (`--bin <dir>` picks another directory), and warns if
+  that directory isn't on your `PATH`. After a `git pull`, run `./install` again to rebuild.
 - If fzf is installed, it turns on [Tab completion](#tab-completion-zsh) by adding a `source` line
   to the end of `~/.zshrc` (`--no-zshrc` skips this).
 
 It also warns when your `~/.zshrc` defines its own `t`, such as `alias t="tmux"`, which would hide
-this one. It never replaces an existing `t`, and running it again only does what isn't done yet.
-`./install --uninstall` removes the link and the `~/.zshrc` line. It doesn't touch your list.
+this one. It never replaces another `t` (a link left by markdone 0.3 is replaced, since it's this
+one), and running it again only does what isn't done yet. `./install --uninstall` removes the link
+and the `~/.zshrc` line. It doesn't touch your lists.
+
+Anywhere, including Windows, you can instead build and install it with cargo, which puts `t` in
+`~/.cargo/bin` (on Windows `%USERPROFILE%\.cargo\bin`):
+
+```sh
+cargo install --path .
+```
+
+Or download a binary for your system from the
+[releases](https://github.com/sharpmist/markdone/releases) and put `t` (`t.exe` on Windows)
+somewhere on your `PATH`. The binaries aren't signed: on macOS, allow one with
+`xattr -d com.apple.quarantine t`; on Windows, choose "More info" and "Run anyway" the first time.
 
 Then open a new terminal and create your list with `t init`, or with `t init --obsidian` to keep it
 in an Obsidian vault (see [Keeping the list in Obsidian](#keeping-the-list-in-obsidian)).
 
 ### Configure
 
-`t` is configured with environment variables:
+`t` is configured with these settings:
 
-| Variable         | Purpose                                                      | Default          |
+| Setting          | Purpose                                                      | Default          |
 | ---------------- | ------------------------------------------------------------ | ---------------- |
 | `TODO_FILE`      | The default list; its folder holds all your lists            | `~/todo/Todo.md` |
 | `TODO_LIST`      | The list to use, by name, instead of the current one         | unset            |
 | `TODO_JIRA_KEYS` | Jira project keys to link, space-separated; empty = off      | unset (no links) |
 | `TODO_JIRA_URL`  | Jira browse URL the keys are appended to; must end with `/`  | unset            |
 
-Set them in `~/.zshenv`. `t` runs under zsh, which reads `~/.zshenv` every time it starts, so the
-settings apply however `t` is started (from bash, scripts or AI agents too). Write them so they only
-fill in values that aren't set yet, as below. A plain `export TODO_FILE=…` there would override
-anything set when running `t`, such as `TODO_FILE=/tmp/test.md t list`.
+Put them in the config file, so they apply however `t` is started (from any shell, scripts or AI
+agents):
+
+- macOS and Linux: `~/.config/markdone/config` (or `$XDG_CONFIG_HOME/markdone/config`)
+- Windows: `%APPDATA%\markdone\config`
 
 ```sh
-# ~/.zshenv
-export TODO_FILE="${TODO_FILE:-$HOME/notes/Todo.md}"
-export TODO_JIRA_KEYS="${TODO_JIRA_KEYS-PROJ OPS WEB}"                              # optional
-export TODO_JIRA_URL="${TODO_JIRA_URL-https://your-company.atlassian.net/browse/}"  # optional
+# ~/.config/markdone/config
+TODO_FILE=~/notes/Todo.md
+TODO_JIRA_KEYS=PROJ OPS WEB
+TODO_JIRA_URL=https://your-company.atlassian.net/browse/
 ```
 
-The Jira lines use `-` instead of `:-` so that `TODO_JIRA_KEYS= t …` still turns linking off for one
-run.
+One `NAME=value` per line; lines starting with `#` are comments. Values are taken as they are, with
+no quotes and no `$` expansion; `~/` at the start of `TODO_FILE` means your home directory.
+`TODO_LIST` can't be set there: it's for one terminal or one agent, so set it in the environment.
 
-`t` doesn't create the list on its own. Open a new terminal (so the settings above are loaded) and
-create it once:
+An environment variable that is set wins over the file, even when empty: `TODO_FILE=/tmp/test.md
+t list` tries a list elsewhere, and `TODO_JIRA_KEYS= t …` turns linking off for one run. An empty
+`TODO_FILE` means the default.
+
+`t` doesn't create the list on its own. Create it once:
 
 ```sh
 t init
 ```
 
-This writes the three section headings (`## Today`, `## Later`, `## Done`) to `$TODO_FILE`, creating
-its directory if needed. It never overwrites: if the file already exists, `t init` stops with an
-error and leaves it alone. `t init <path>` creates the list at `<path>` instead and shows the
-`~/.zshenv` line that makes `t` use it.
+This writes the three section headings (`## Today`, `## Later`, `## Done`) to the default list,
+creating its directory if needed. It never overwrites: if the file already exists, `t init` stops
+with an error and leaves it alone. `t init <path>` creates the list at `<path>` instead and shows
+the config line that makes `t` use it.
 
 ### Keeping the list in Obsidian
 
@@ -231,28 +252,25 @@ t init --obsidian
 ```
 
 It reads the vaults Obsidian knows about (any vault you've opened in it) and asks which one to use.
-With a single vault it just names it. It then creates `<vault>/Todo/Todo.md` and, if you agree, adds
-a line to `~/.zshenv` so that `t` and your AI agents use that list from then on:
+With a single vault it just names it. It then creates `<vault>/Todo/Todo.md` and, if you agree,
+writes it to the config file so that `t` and your AI agents use that list from then on:
 
 ```sh
-# markdone: where t keeps the list (set by t init)
-export TODO_FILE="${TODO_FILE:-$HOME/Documents/My Vault/Todo/Todo.md}"
+# ~/.config/markdone/config
+TODO_FILE=~/Documents/My Vault/Todo/Todo.md
 ```
 
-Running it again replaces that line. If `~/.zshenv` already sets `TODO_FILE` some other way, it's
-left alone and `t init` shows what to change. If the vault already has a list (say, synced from
-another computer), `t init --obsidian` uses it as it is. A plain `t init` in a terminal offers your
-vaults too, unless `TODO_FILE` is already set.
+Running it again replaces that line and keeps the rest of the file. If the vault already has a
+list (say, synced from another computer), `t init --obsidian` uses it as it is. A plain `t init` in
+a terminal offers your vaults too, unless `TODO_FILE` is already set.
 
 `t init` only asks questions in a terminal. Run elsewhere (by a script or an AI agent), it asks
-nothing: it uses the only vault, stops with a list if there are several, and shows the `~/.zshenv`
-line instead of adding it.
+nothing: it uses the only vault, stops with a list if there are several, and shows the config line
+instead of writing it.
 
 In the vault, the archives (`Archive/Todo 2026.md`, …) are ordinary notes in the `Todo` folder's
 `Archive` subfolder. The lock, backup and checksum files start with a dot, so Obsidian doesn't
 show them.
-
-Archives (`Archive/Todo 2026.md`, …) are written to an `Archive` folder next to the lists.
 
 While a command runs, `t` holds a lock on a hidden, empty `.Todo.md.lock` file next to the list
 (named after your list file). Runs that start meanwhile, from you or an AI agent, wait for it, up to
@@ -267,8 +285,9 @@ or by a sync), so it never throws such a change away: `t` keeps a checksum of wh
 in a hidden `.Todo.md.sum` and compares the list with it. A change that archived done items can't be
 undone, since that would archive them twice.
 
-`t edit` opens the list in `$EDITOR`, or `nvim` if `$EDITOR` isn't set. `$EDITOR` may include
-arguments, e.g. `EDITOR="code -w"`.
+`t edit` opens the list in `$EDITOR`, or `nvim` (`notepad` on Windows) if `$EDITOR` isn't set.
+`$EDITOR` may include arguments, e.g. `EDITOR="code -w"`, or be the full path of an editor, spaces
+and all.
 
 ## File format
 
@@ -284,7 +303,8 @@ arguments, e.g. `EDITOR="code -w"`.
 ```
 
 You can edit the file by hand or in any Markdown editor; `t` keeps it in this shape. Other lines
-(notes, blank lines) between items are left as they are.
+(notes, blank lines) between items are left as they are. Windows line endings (CRLF) work too: the
+lines `t` writes take the ending of the file's first line, and the others keep theirs.
 
 Keep `## Done` as the last section. Ticked items are moved into `## Done` only when it comes after
 them; otherwise `t` warns and leaves the list untidied.
@@ -330,6 +350,32 @@ source /path/to/markdone/shell/t.zsh
 The commands shown come from `t commands`, and everything else from `t complete <words>`, so
 `shell/t.zsh` doesn't need changing when commands are added.
 
+## Windows
+
+`t` works the same in PowerShell, cmd and Windows Terminal. A few things differ:
+
+- The config file is `%APPDATA%\markdone\config`, and `t edit` opens Notepad unless `EDITOR` is set.
+  An `EDITOR` like `code -w` works (VS Code's `code` is a `.cmd` file, found through `PATHEXT`).
+- `t` writes UTF-8. For non-ASCII item text to show correctly in PowerShell, set
+  `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` (for example in your profile).
+- Windows PowerShell 5.1 drops `"` inside arguments it passes to programs; use PowerShell 7, or
+  avoid double quotes inside item text there.
+- Tab completion and `./install` need zsh, so they're for macOS and Linux.
+
+## Upgrading from 0.3
+
+markdone 0.3 was a zsh script and read its settings from `~/.zshenv`. 0.4 is a program and doesn't
+read `~/.zshenv`:
+
+1. Run `./install` again: it builds `t` and replaces the old link.
+2. Move your settings (`TODO_FILE`, `TODO_JIRA_KEYS`, `TODO_JIRA_URL`) from `~/.zshenv` to the
+   [config file](#configure). Until you do, `t` started outside zsh warns and shows the line to
+   add; in zsh they still reach `t` from the environment.
+3. Your lists, archives, backups and undo history work as they are.
+
+Don't use 0.3 and 0.4 on the same list at the same time (say, an old copy on another computer
+syncing the same folder): on Linux their locks don't see each other.
+
 ## Using it from AI agents
 
 Add something like this to your agent's instructions (e.g. `~/.claude/CLAUDE.md` or `AGENTS.md`):
@@ -353,14 +399,17 @@ My todo list is managed with the `t` command. Run `t help` for all commands.
 ## Test
 
 ```sh
+cargo test
 test/run.zsh
 ```
 
-Runs `bin/t` against throwaway files, with an example Jira setup. It runs with a temporary home
-folder and ignores your `~/.zshenv`, so your real list, settings and Obsidian vaults are never
-touched. Besides the requirements above, it needs `python3`
-(for the terminal-output checks) and zsh's standard `zsh/zpty` and `zsh/zselect` modules (for the
-Tab completion checks).
+`cargo test` runs the unit tests and the integration tests in `tests/`, on any system. Then, on
+macOS or Linux, `test/run.zsh` runs the checks that need zsh or a terminal (Tab completion, `t pick`,
+`t edit`, `t init`'s questions, `./install`) against the built `target/debug/t`; it needs `python3`
+and zsh's standard `zsh/zpty` and `zsh/zselect` modules.
+
+Both run `t` with a temporary home folder and config folder, so your real lists, settings and
+Obsidian vaults are never touched.
 
 ## License
 

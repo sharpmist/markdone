@@ -1,0 +1,94 @@
+name: release
+
+# On a v* tag: build t for each system, pack it with LICENSE, README.md and shell/t.zsh, and publish
+# a GitHub release with the archives and their SHA256SUMS. On a pull request that changes this file
+# or the version, or when started by hand, it builds and packs without publishing (a dry run).
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml', 'Cargo.toml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Pack (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          name="t-$ver-${{ matrix.target }}"
+          mkdir -p "$name/shell"
+          cp "target/${{ matrix.target }}/release/t" LICENSE README.md "$name/"
+          cp shell/t.zsh "$name/shell/"
+          tar czf "$name.tar.gz" "$name"
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+      - name: Pack (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
+          $name = "t-$ver-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "$name/shell" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/t.exe", LICENSE, README.md -Destination "$name/"
+          Copy-Item shell/t.zsh -Destination "$name/shell/"
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "ARCHIVE=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --verify-tag \
+            --title "markdone ${GITHUB_REF_NAME#v}" \
+            --notes "Binaries of t for macOS, Linux and Windows. See README.md for Install and \"Upgrading from 0.3\". The binaries aren't signed." \
+            *

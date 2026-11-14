@@ -1,16 +1,19 @@
 #!/usr/bin/env zsh
-# install - set up t from this clone: link bin/t into a directory on PATH and turn on Tab
-# completion in ~/.zshrc. Run it again at any time; it only does what isn't done yet.
+# install - set up t from this clone: build it, link the binary into a directory on PATH and turn
+# on Tab completion in ~/.zshrc. Run it again at any time (also after a git pull, to rebuild); it
+# only does what isn't done yet.
 #
-#   ./install [--bin <dir>] [--no-zshrc]   install (default dir: ~/.local/bin)
-#   ./install --uninstall [--bin <dir>]    undo both
+#   ./install [--bin <dir>] [--no-zshrc] [--no-build]   install (default dir: ~/.local/bin)
+#   ./install --uninstall [--bin <dir>]                undo both
 #
 # It never creates or touches the todo list itself; run `t init` for that.
 
 repo=${0:A:h}
+target=$repo/target/release/t
+old=$repo/bin/t   # t 0.3 was this zsh script; a link to it counts as this t
 bin=$HOME/.local/bin
 rc=${ZDOTDIR:-$HOME}/.zshrc
-mode=install edit_rc=1
+mode=install edit_rc=1 build=1
 src="source ${(qq):-$repo/shell/t.zsh}"
 mark="# markdone: Tab completion for t (remove with ./install --uninstall)"
 
@@ -21,15 +24,20 @@ while (( $# )); do
   case $1 in
     --bin) [[ -n $2 ]] || die "--bin needs a directory"; bin=${2:a}; shift 2 ;;
     --no-zshrc) edit_rc=0; shift ;;
+    --no-build) build=0; shift ;;
     --uninstall) mode=uninstall; shift ;;
-    -h|--help) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,9s/^# \{0,1\}//p' "$0"; exit 0 ;;
     *) die "unknown option '$1' (see ./install --help)" ;;
   esac
 done
 link=$bin/t
 
+# ours <path>: whether <path> is a link to this clone's t: the binary, or 0.3's script, which is
+# gone, so that link is compared by its text.
+ours() { [[ -L $1 && ( ${1:A} == $target || $(readlink -- "$1") == $old ) ]]; }
+
 if [[ $mode == uninstall ]]; then
-  if [[ -L $link && ${link:A} == $repo/bin/t ]]; then
+  if ours "$link"; then
     rm -f -- "$link" || die "could not remove $link"
     print -r -- "Removed $link"
   else
@@ -52,20 +60,27 @@ if [[ $mode == uninstall ]]; then
   exit 0
 fi
 
-# 1. The command: a symlink, so a git pull in this clone updates it.
+# 1. Build the binary (cargo prints its own progress).
+if (( build )); then
+  (( $+commands[cargo] )) || die "cargo isn't installed; get Rust from https://rustup.rs and run ./install again"
+  ( cd -- "$repo" && cargo build --release --locked ) || die "cargo build failed; see the messages above"
+fi
+[[ -x $target ]] || die "$target isn't built; run ./install without --no-build"
+
+# 2. The command: a symlink, so rebuilding in this clone updates it.
 mkdir -p -- "$bin" || die "could not create $bin"
-if [[ -L $link && ${link:A} == $repo/bin/t ]]; then
+if [[ -L $link && ${link:A} == $target ]]; then
   print -r -- "t is already linked: $link"
-elif [[ -e $link || -L $link ]]; then
+elif [[ -e $link || -L $link ]] && ! ours "$link"; then
   die "$link already exists and isn't this t; remove it, or choose another directory with --bin"
 else
-  ln -s -- "$repo/bin/t" "$link" || die "could not link $link"
-  print -r -- "Linked $link -> $repo/bin/t"
+  rm -f -- "$link" && ln -s -- "$target" "$link" || die "could not link $link"
+  print -r -- "Linked $link -> $target"
 fi
 [[ :$PATH: == *:$bin:* ]] ||
   warn "$bin isn't on your PATH; add it, e.g. in ~/.zshenv: export PATH=\"$bin:\$PATH\""
 
-# 2. Tab completion, after fzf's own key bindings (which come earlier in a typical ~/.zshrc).
+# 3. Tab completion, after fzf's own key bindings (which come earlier in a typical ~/.zshrc).
 if (( ! edit_rc )); then
   :
 elif [[ -f $rc ]] && grep -qF -- "$repo/shell/t.zsh" "$rc"; then
@@ -79,10 +94,10 @@ else
     warn "$rc doesn't seem to load fzf's key bindings; Tab completion works best after: source <(fzf --zsh)"
 fi
 
-# 3. Anything else called t in your shell would hide this one.
+# 4. Anything else called t in your shell would hide this one.
 if [[ -f $rc ]]; then
   clash=$(grep -nE '^[[:space:]]*(alias[[:space:]]+(-g[[:space:]]+)?t=|(function[[:space:]]+)?t[[:space:]]*\(\))' "$rc")
   [[ -n $clash ]] && warn "$rc defines its own t, which hides this one; rename or remove it:"$'\n'"$clash"
 fi
 
-print -r -- "Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)."
+print -r -- "Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first). After a git pull, run ./install again to rebuild t."

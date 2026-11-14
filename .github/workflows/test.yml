@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ['v*']
   pull_request:
 
@@ -10,48 +10,66 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: ${{ matrix.name }}
+  # cargo test: unit tests and the integration tests in tests/, on the three systems t runs on.
+  rust:
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS (BSD awk)
-            os: macos-latest
-          - name: Linux (mawk)
-            os: ubuntu-latest
-            packages: zsh mawk
-            awk: mawk
-          - name: Linux (gawk)
-            os: ubuntu-latest
-            packages: zsh gawk
-            awk: gawk
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install zsh and awk
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy rustfmt
+          cargo --version
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  # test/run.zsh: the checks that need zsh or a terminal (Tab completion, pick, edit, init prompts,
+  # ./install). Needs zsh and python3, so macOS and Linux only.
+  zsh:
+    name: zsh and terminal checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.packages }}
-          # bin/t calls plain "awk"; put the awk under test first on PATH
-          mkdir -p "$RUNNER_TEMP/awk"
-          ln -s "$(command -v ${{ matrix.awk }})" "$RUNNER_TEMP/awk/awk"
-          echo "$RUNNER_TEMP/awk" >> "$GITHUB_PATH"
-      - name: Show tool versions
-        run: |
-          zsh --version
-          command -v awk
-          perl -e 'print "perl $^V\n"'
-          python3 --version
-      - name: Run tests
+          sudo apt-get install -y zsh
+      - name: Build
+        run: cargo build --locked
+      - name: Run test/run.zsh
         run: test/run.zsh
       - name: Check the tag matches t --version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Linux'
         run: |
-          got=$(ZDOTDIR="$RUNNER_TEMP" bin/t --version)
+          got=$(target/debug/t --version)
           want="t ${GITHUB_REF_NAME#v}"
           if [ "$got" != "$want" ]; then
-            echo "tag $GITHUB_REF_NAME doesn't match bin/t: got '$got', want '$want'" >&2
+            echo "tag $GITHUB_REF_NAME doesn't match t --version: got '$got', want '$want'" >&2
             exit 1
           fi
+
+  # The oldest Rust t supports (rust-version in Cargo.toml).
+  msrv:
+    name: Rust 1.89 (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust 1.89
+        run: rustup toolchain install 1.89 --profile minimal --no-self-update
+      - name: Build and test
+        run: cargo +1.89 test --locked
