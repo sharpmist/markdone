@@ -33,7 +33,7 @@ the lists, a subcommand) and offers that. Anywhere else, Tab does what it did be
   calls `zle "$_t_tab_fallback"`.
 - **Input format.** Every menu's lines are `<insert text>\t<display text>`. fzf shows the second
   field (`--with-nth=2`); the first field is inserted after `t ` or `t <words> `. See
-  [`../bin/EGM.md`](../bin/EGM.md).
+  [`../src/EGM.md`](../src/EGM.md).
 - **Quoted inserts.** An insert text ending in `""` is split so the cursor lands between the
   quotes (`LBUFFER` gets the opening quote, `RBUFFER` the closing one).
 - **Pre-filled query.** The partial word (after `t `, `t @` or `t <words> `) is passed to fzf as
@@ -42,8 +42,8 @@ the lists, a subcommand) and offers that. Anywhere else, Tab does what it did be
   `<indent>t <words> <insert text>`, keeping any leading whitespace and collapsing the spaces
   before the partial word. Cancelling fzf leaves the line as it was.
 - **No command list here.** Commands are never hardcoded in this file. Adding a command only needs
-  a change to `commands()` in `bin/t`, plus `ITEM_CMDS` or `complete_cmd()` when Tab should offer
-  something after it.
+  a change to `COMMANDS` in `src/complete.rs`, plus `ITEM_CMDS` or `words()` there when Tab should
+  offer something after it.
 - `t` must be on `PATH` (`command t`), and `fzf` must be installed.
 
 ## Side Effects
@@ -57,5 +57,5 @@ the lists, a subcommand) and offers that. Anywhere else, Tab does what it did be
 
 ## Verification
 
-- Run: `test/run.zsh` (from the repository root; the Tab completion checks need zsh's `zsh/zpty`
-  and `zsh/zselect` modules)
+- Run: `cargo build`, then `test/run.zsh` (from the repository root; the Tab completion checks need
+  zsh's `zsh/zpty` and `zsh/zselect` modules). `cargo test` checks `t commands` and `t complete`.

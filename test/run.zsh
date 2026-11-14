@@ -1,15 +1,13 @@
 #!/usr/bin/env zsh
 # Runs t against throwaway files and checks output, exit codes and file contents.
 # Usage: test/run.zsh   (exits non-zero if any check fails)
-#   T_BIN=/abs/path/to/t test/run.zsh   tests another build of t (default: bin/t, the zsh version)
+# The checks that need zsh or a terminal; everything else is in tests/*.rs (cargo test).
+#   T_BIN=/abs/path/to/t test/run.zsh   tests another build of t (default: target/debug/t)
 
 repo=${0:A:h:h}
-T_BIN=${T_BIN:-$repo/bin/t}
+T_BIN=${T_BIN:-$repo/target/debug/t}
 [[ $T_BIN == /* ]] || { print -r -- "T_BIN must be an absolute path (got '$T_BIN')" >&2; exit 2; }
-[[ -x $T_BIN ]] || { print -r -- "T_BIN isn't an executable file: $T_BIN" >&2; exit 2; }
-# Which implementation is under test: the zsh script or the Rust program (docs/designs/rust_port.md).
-# Checks of behaviour only one of them has run only for that one.
-if [[ $T_BIN == $repo/bin/t ]]; then impl=zsh; else impl=rust; fi
+[[ -x $T_BIN ]] || { print -r -- "t isn't built at $T_BIN; run cargo build first" >&2; exit 2; }
 zmodload zsh/datetime
 days_ago() { local noon; strftime -r -s noon '%F %T' "$(strftime %F $EPOCHSECONDS) 12:00:00"; strftime %F $(( noon - $1 * 86400 )); }
 today=$(date +%F); d7=$(days_ago 7); d8=$(days_ago 8)
@@ -26,15 +24,15 @@ run() { out=$("$T_BIN" "$@" 2>&1); rc=$?; }  # sets $out and $rc
 zmodload zsh/system
 suite_pid=$sysparams[pid]
 dirs=(); trap '(( sysparams[pid] == suite_pid )) && { chmod -R u+w $dirs 2>/dev/null; rm -rf $dirs; }' EXIT
-# bin/t runs under zsh, which reads $ZDOTDIR/.zshenv (default ~/.zshenv) on every start. Point it at
-# an empty dir so the user's TODO_* settings can't override the test's, or send t to the real list.
+# t looks into $ZDOTDIR/.zshenv (default ~/.zshenv) for the upgrade warning, and zsh reads it in the
+# shells this script starts. Point it at an empty dir so the user's settings can't get in.
 export ZDOTDIR=$(mktemp -d); dirs+=$ZDOTDIR
 # A throwaway home as well, for everything this script and t run. Without it, a test that forgets to
 # set HOME reaches the real one: t init reads Obsidian's list of vaults there and can create a list
-# in a real vault and write ~/.zshenv; ./install links into ~/.local/bin and edits ~/.zshrc.
+# in a real vault; ./install links into ~/.local/bin and edits ~/.zshrc.
 real_home=$HOME
 export HOME=$(mktemp -d); dirs+=$HOME
-# The Rust t reads a config file from $XDG_CONFIG_HOME (or %APPDATA% on Windows) and t init can write
+# t reads a config file from $XDG_CONFIG_HOME (or %APPDATA% on Windows) and t init can write
 # it. Point both into the throwaway home too, so the real config is never read or changed.
 export XDG_CONFIG_HOME=$HOME/.config APPDATA=$HOME/AppData
 fresh() { dir=$(mktemp -d); dirs+=$dir; export TODO_FILE="$dir/Todo.md"; print -rn -- "$1" >"$TODO_FILE"; }
@@ -68,7 +66,7 @@ check "list --done on a terminal shows clickable keys" "$today  Shipped $(osc WE
 out=$(on_tty list --json)
 [[ $out == "["* && $out != *$'\e'* ]]; check "json: plain even on a terminal" 0 $?
 run lists add Work
-out=$(on_tty list); check "list on a terminal names the list when there are several" $'\e[1mTodo\e[0m' "${${(f)out}[1]}"
+out=$(on_tty list); check "list on a terminal names the list when there are several" $'\e[1mTodo\e[0m' "${out%%$'\n'*}"
 
 # --- Tab completion widget (shell/t.zsh), driven through a pseudo-terminal ---
 zmodload zsh/zpty zsh/zselect
@@ -133,35 +131,17 @@ setup "export TODO_FILE='$dir/none.md'"
 tab 't done ';   check "Tab with no list falls back"                   't done X|8'    "$got"
 zpty -d TT
 
-# --- configuration from ~/.zshenv, in the form README.md recommends ---
-# The zsh version only: the Rust t takes settings from a config file instead (tests/config.rs).
-if [[ $impl == zsh ]]; then
-zdot=$(mktemp -d); dirs+=$zdot
-fresh "$EMPTY"; other=$TODO_FILE
-print -r -- 'export TODO_FILE="${TODO_FILE:-'"$other"'}"' >"$zdot/.zshenv"
-fresh "$EMPTY"
-out=$(ZDOTDIR=$zdot "$T_BIN" add mine 2>&1)
-check "a TODO_FILE given by the caller wins over ~/.zshenv" "Added 1 (Today): mine" "$out"
-check "~/.zshenv's TODO_FILE untouched" "$EMPTY" "$(<"$other")"$'\n'
-out=$(unset TODO_FILE; ZDOTDIR=$zdot "$T_BIN" add theirs 2>&1)
-check "~/.zshenv fills in TODO_FILE when unset" "Added 1 (Today): theirs" "$out"
-fi
-
 # --- edit ---
 fresh "$EMPTY"
 out=$(EDITOR="echo opened" "$T_BIN" edit 2>&1)
 check "EDITOR with arguments" "opened $TODO_FILE" "$out"
 
 # --- the lock while t edit and t pick hand over to another program ---
-# $lockbin/trylock <lock file> prints "free" when the lock can be taken, else "held". It locks the
-# way the t under test does: fcntl (zsystem flock) for bin/t, flock for the Rust t; on Linux the
-# two don't see each other. (The other locking checks are in tests/locking.rs.)
+# $lockbin/trylock <lock file> prints "free" when the lock can be taken, else "held". It takes a
+# flock lock, as t does (zsh's own zsystem flock is fcntl, which Linux keeps apart from flock).
+# (The other locking checks are in tests/locking.rs.)
 lockbin=$(mktemp -d); dirs+=$lockbin
-if [[ $impl == zsh ]]; then
-  print -r -- '#!/bin/sh
-exec zsh -fc '\''zmodload zsh/system; zsystem flock -t 0 -f fd "$1" 2>/dev/null && echo free || echo held'\'' x "$1"' >"$lockbin/trylock"
-else
-  print -r -- '#!/bin/sh
+print -r -- '#!/bin/sh
 exec python3 -I -c '\''
 import fcntl, sys
 f = open(sys.argv[1], "a")
@@ -170,7 +150,6 @@ try:
 except OSError:
     print("held")
 '\'' "$1"' >"$lockbin/trylock"
-fi
 chmod +x "$lockbin/trylock"
 lock_of() { print -r -- "${TODO_FILE:h}/.${TODO_FILE:t}.lock"; }
 
@@ -249,30 +228,51 @@ done)
 check "README demo matches real output" "$demo" "$replay"
 
 # --- ./install ---
-# Always with a throwaway home: ./install edits ~/.zshrc and links into ~/.local/bin.
-inst() { out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$fakebin:$PATH" "$repo/install" "$@" 2>&1); rc=$?; }
+# Always with a throwaway home (./install edits ~/.zshrc and links into ~/.local/bin), and from a
+# throwaway copy of the repo with a fake cargo, so no real build runs: the fake one logs its
+# arguments to $copy/cargo.log and makes target/release/t (or fails when CARGO_FAIL is set).
+copy=$(mktemp -d); dirs+=$copy; copy=${copy:A}
+mkdir -p "$copy/shell"; cp "$repo/install" "$copy/"; cp "$repo/shell/t.zsh" "$copy/shell/"
+built=$copy/target/release/t
+cat >"$fakebin/cargo" <<'EOS'
+#!/bin/sh
+echo "$@" >>cargo.log
+[ -n "$CARGO_FAIL" ] && exit 1
+mkdir -p target/release && printf '#!/bin/sh\n' >target/release/t && chmod +x target/release/t
+EOS
+chmod +x "$fakebin/cargo"
+inst() { out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$fakebin:$PATH" "$copy/install" "$@" 2>&1); rc=$?; }
+DONE="Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first). After a git pull, run ./install again to rebuild t."
 home=$(mktemp -d); dirs+=$home
 print -r -- 'source <(fzf --zsh)' >"$home/.zshrc"
 inst
-check "install: links t and turns on Tab completion" "0|Linked $home/.local/bin/t -> $repo/bin/t
+check "install: builds, links t and turns on Tab completion" "0|Linked $home/.local/bin/t -> $built
 Turned on Tab completion: added to the end of $home/.zshrc:
-  source '$repo/shell/t.zsh'
-Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)." "$rc|$out"
-[[ ${${:-$home/.local/bin/t}:A} == $repo/bin/t ]]; check "install: the link points at this clone's t" 0 $?
+  source '$copy/shell/t.zsh'
+$DONE" "$rc|$out"
+check "install: builds with cargo build --release --locked" "build --release --locked" "$(<"$copy/cargo.log")"
+[[ ${${:-$home/.local/bin/t}:A} == $built ]]; check "install: the link points at this clone's binary" 0 $?
 check "install: ~/.zshrc gets one marked source line" "source <(fzf --zsh)
 
 # markdone: Tab completion for t (remove with ./install --uninstall)
-source '$repo/shell/t.zsh'" "$(<"$home/.zshrc")"
+source '$copy/shell/t.zsh'" "$(<"$home/.zshrc")"
 before=$(<"$home/.zshrc"); inst
-check "install again: nothing to do" "0|t is already linked: $home/.local/bin/t
+check "install again: rebuilds, nothing else to do" "0|t is already linked: $home/.local/bin/t
 Tab completion is already on in $home/.zshrc
-Done. Open a new terminal, then run 't init' to create your list (or set TODO_FILE first)." "$rc|$out"
+$DONE" "$rc|$out"
 check "install again: ~/.zshrc unchanged" "$before" "$(<"$home/.zshrc")"
 inst --uninstall
 check "uninstall removes the link and the line" "0|Removed $home/.local/bin/t
 Removed Tab completion from $home/.zshrc" "$rc|$out"
 check "uninstall leaves the rest of ~/.zshrc as it was" "source <(fzf --zsh)" "$(<"$home/.zshrc")"
 inst --uninstall; check "uninstall again: nothing to do" "0|No link to this t at $home/.local/bin/t; left alone" "$rc|$out"
+
+# Upgrading from 0.3, whose link pointed at the zsh script bin/t (gone now).
+home=$(mktemp -d); dirs+=$home; mkdir -p "$home/.local/bin"; ln -s "$copy/bin/t" "$home/.local/bin/t"
+inst --no-zshrc
+check "install over 0.3: the old link is replaced" "0|Linked $home/.local/bin/t -> $built" "$rc|${${(@f)out}[1]}"
+ln -sf "$copy/bin/t" "$home/.local/bin/t"; inst --uninstall
+check "uninstall removes 0.3's link too" "Removed $home/.local/bin/t" "${out%%$'\n'*}"
 
 home=$(mktemp -d); dirs+=$home
 print -r -- $'alias t="tmux"\nsource <(fzf --zsh)' >"$home/.zshrc"
@@ -288,18 +288,36 @@ inst --uninstall; check "uninstall leaves another t alone" "x" "$(<"$home/.local
 
 home=$(mktemp -d); dirs+=$home
 inst --bin "$home/elsewhere"
-check "install --bin off PATH: links there, warns" "0|Linked $home/elsewhere/t -> $repo/bin/t|install: $home/elsewhere isn't on your PATH; add it, e.g. in ~/.zshenv: export PATH=\"$home/elsewhere:\$PATH\"" \
+check "install --bin off PATH: links there, warns" "0|Linked $home/elsewhere/t -> $built|install: $home/elsewhere isn't on your PATH; add it, e.g. in ~/.zshenv: export PATH=\"$home/elsewhere:\$PATH\"" \
   "$rc|${(j:|:)${(@f)out}[1,2]}"
 [[ $out == *"doesn't seem to load fzf's key bindings"* ]]; check "install warns when ~/.zshrc doesn't load fzf" 0 $?
 
+# Building: without cargo, a failed build, and --no-build.
 home=$(mktemp -d); dirs+=$home
-for c in mkdir ln sed; do ln -sf "${commands[$c]}" "$nofzf/$c"; done
-out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$nofzf" "$repo/install" 2>&1); rc=$?
+nocargo=$(mktemp -d); dirs+=$nocargo
+for c in zsh mkdir ln sed grep awk cat rm mktemp; do ln -sf "${commands[$c]}" "$nocargo/$c"; done
+out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$nocargo" "$copy/install" 2>&1); rc=$?
+check "install without cargo fails" "1|install: cargo isn't installed; get Rust from https://rustup.rs and run ./install again" "$rc|$out"
+out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$nocargo" "$copy/install" --no-build --no-zshrc 2>&1); rc=$?
+check "install --no-build links what is built" "0|Linked $home/.local/bin/t -> $built" "$rc|${${(@f)out}[1]}"
+home=$(mktemp -d); dirs+=$home
+out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$fakebin:$PATH" CARGO_FAIL=1 "$copy/install" 2>&1); rc=$?
+check "install: a failed build stops it" "1|install: cargo build failed; see the messages above" "$rc|$out"
+[[ ! -e $home/.local/bin/t ]]; check "install: a failed build links nothing" 0 $?
+rm -rf "$copy/target"
+out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$nocargo" "$copy/install" --no-build 2>&1); rc=$?
+check "install --no-build without a build fails" "1|install: $built isn't built; run ./install without --no-build" "$rc|$out"
+
+home=$(mktemp -d); dirs+=$home
+for c in mkdir ln sed chmod; do ln -sf "${commands[$c]}" "$nofzf/$c"; done
+ln -sf "$fakebin/cargo" "$nofzf/cargo"
+out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$nofzf" "$copy/install" 2>&1); rc=$?
 check "install without fzf: Tab completion left off" "0|install: fzf isn't installed, so Tab completion is left off; install fzf and run ./install again" "$rc|${${(f)out}[2]}"
 [[ ! -e $home/.zshrc ]]; check "install without fzf: no ~/.zshrc written" 0 $?
 
-inst --help; [[ $rc == 0 && $out == *"./install --uninstall"* ]]; check "install --help" 0 $?
+inst --help; [[ $rc == 0 && $out == *"./install --uninstall"* && $out == *"--no-build"* ]]; check "install --help" 0 $?
 inst --bogus; check "install: unknown option fails" "1|install: unknown option '--bogus' (see ./install --help)" "$rc|$out"
+
 # --- t init in a terminal, with Obsidian vaults (tests/init.rs has the cases without one) ---
 # A throwaway home with Obsidian's list of vaults; TODO_FILE unset, as for a new user.
 vhome() { # <vault dir names...>: new $home listing these vaults (the last one most recently opened)
@@ -322,23 +340,14 @@ ttyinit() { # <answers> <args...>: the same in a terminal, typing the answers; s
   zpty -d TTY
   buf=${buf//$'\r'/}; rc=${${buf##*<rc=}%%>*}; out=${${buf%<rc=*}%$'\n'}
 }
-MARK='# markdone: where t keeps the list (set by t init)'
-# Where t init remembers the list: ~/.zshenv for the zsh version, the config file for the Rust one.
+# Where t init remembers the list: the config file.
 #   cfgname: the file as messages show it; cfgfile: its path in $home;
-#   cfgline <path under ~>: the line t shows; cfgsaved <path under ~>: what t writes there.
-if [[ $impl == zsh ]]; then
-  cfgname='~/.zshenv'
-  cfgfile() { print -r -- "$home/.zshenv"; }
-  cfgline() { print -r -- "export TODO_FILE=\"\${TODO_FILE:-\$HOME/$1}\""; }
-  cfgsaved() { print -r -- "$MARK"; cfgline "$1"; }
-  extra='export EDITOR=vi'
-else
-  cfgname='~/.config/markdone/config'
-  cfgfile() { print -r -- "$home/.config/markdone/config"; }
-  cfgline() { print -r -- "TODO_FILE=~/$1"; }
-  cfgsaved() { cfgline "$1"; }
-  extra='# my own line'
-fi
+#   cfgline <path under ~>: the line t shows and writes there.
+cfgname='~/.config/markdone/config'
+cfgfile() { print -r -- "$home/.config/markdone/config"; }
+cfgline() { print -r -- "TODO_FILE=~/$1"; }
+cfgsaved() { cfgline "$1"; }
+extra='# my own line'
 
 vhome Work Notes
 ttyinit $'2\ny' init --obsidian
@@ -354,14 +363,8 @@ check "after init --obsidian, t uses the vault's list" "0|Added 1 (Today): from 
 print -r -- "$extra" >>"$(cfgfile)"
 ttyinit $'\n' init --obsidian
 check "init --obsidian again: Enter picks the newest vault and saves" "0|Saved in $cfgname: t now uses $home/Vaults/Notes/Todo/Todo.md" "$rc|${${(f)out}[-1]##*\] }"
-if [[ $impl == zsh ]]; then
-  check "init --obsidian again: the earlier line is replaced, the rest kept" "$extra
-
-$(cfgsaved Vaults/Notes/Todo/Todo.md)" "$(<"$(cfgfile)")"
-else
-  check "init --obsidian again: the earlier line is replaced in place, the rest kept" "$(cfgsaved Vaults/Notes/Todo/Todo.md)
+check "init --obsidian again: the earlier line is replaced in place, the rest kept" "$(cfgsaved Vaults/Notes/Todo/Todo.md)
 $extra" "$(<"$(cfgfile)")"
-fi
 ttyinit 1 init --obsidian
 check "init --obsidian: an existing list is used as it is" \
   "$home/Vaults/Notes/Todo/Todo.md already exists; using it as it is|$cfgname already points t at this list" \
@@ -376,21 +379,6 @@ Use this list from now on, also from AI agents? This adds TODO_FILE to $cfgname.
 [[ ! -e $(cfgfile) ]]; check "init --obsidian, not saved: no $cfgname written" 0 $?
 
 
-if [[ $impl == zsh ]]; then
-vhome Solo; print -r -- 'export TODO_FILE="$HOME/elsewhere.md"' >"$home/.zshenv"
-before=$(<"$home/.zshenv")
-ttyinit "" init --obsidian
-check "init --obsidian: a TODO_FILE set elsewhere in ~/.zshenv is left alone" "0|~/.zshenv already sets TODO_FILE, so it's left alone:
-  1: export TODO_FILE=\"\$HOME/elsewhere.md\"
-To use this list, change that to:
-  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|${(F)${(@f)out}[3,-1]}"
-check "init --obsidian: that ~/.zshenv is unchanged" "$before" "$(<"$home/.zshenv")"
-
-vhome 'My "odd" $vault'
-ttyinit y init --obsidian
-check "init --obsidian: odd vault names are quoted for ~/.zshenv" "$home/Vaults/My \"odd\" \$vault/Todo/Todo.md" \
-  "$(HOME=$home zsh -fc 'unset TODO_FILE; source "$HOME/.zshenv"; print -r -- $TODO_FILE')"
-else
 # The config file has one TODO_FILE line: t init replaces it, keeping the other lines.
 vhome Solo; mkdir -p "${$(cfgfile):h}"; print -r -- $'TODO_FILE=/elsewhere.md\nTODO_JIRA_KEYS=PROJ' >"$(cfgfile)"
 ttyinit y init --obsidian
@@ -404,7 +392,6 @@ vhome 'My "odd" vault'
 ttyinit y init --obsidian
 check "init --obsidian: odd vault names are written as they are" "$(cfgsaved 'Vaults/My "odd" vault/Todo/Todo.md')" "$(<"$(cfgfile)")"
 tinit add "odd"; check "init --obsidian: t uses the list in the odd vault" "0|Added 1 (Today): odd" "$rc|$out"
-fi
 
 vhome Work Notes
 ttyinit 7 init --obsidian; check "init --obsidian: a choice out of range fails" "1|t: no choice '7'; nothing done" "$rc|${${(f)out}[-1]##*\] }"

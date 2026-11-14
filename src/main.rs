@@ -1,6 +1,6 @@
 //! t: personal todo lists kept as Markdown files, one file per list, in one folder.
 //!
-//! The Rust port of the zsh script `bin/t`; see `docs/designs/rust_port.md`.
+//! Replaced the zsh script of 0.3 (docs/designs/rust_port.md); the contract is src/EGM.md.
 
 mod complete;
 mod config;
@@ -26,7 +26,7 @@ use jira::Jira;
 use lists::{List, Lists, lossy};
 use lock::{Lock, What};
 
-/// 0.3.0's usage text, unchanged (`usage()` in `bin/t`).
+/// The usage text, as in 0.3.0.
 const USAGE: &str = r#"Usage:
   t [list]                  list open items, numbered          (aliases: ls, l)
   t list --today | --later  list only Today's or Later's open items (same numbers as t list)
@@ -880,25 +880,5 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
         Err(Fail::Exit(code)) => ExitCode::from(code),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn usage_matches_the_zsh_version() {
-        // bin/t prints its usage from a heredoc; the Rust text must stay identical until the
-        // script is removed (step S12). Git on Windows may check bin/t out with CRLF line
-        // endings; compare the text only.
-        let script = include_str!("../bin/t").replace("\r\n", "\n");
-        let usage = USAGE.replace("\r\n", "\n");
-        let start = script
-            .find("cat <<'EOF'\n")
-            .expect("usage heredoc in bin/t")
-            + 12;
-        let end = start + script[start..].find("\nEOF\n").expect("end of heredoc") + 1;
-        assert_eq!(usage, &script[start..end]);
     }
 }

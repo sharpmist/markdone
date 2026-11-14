@@ -2,13 +2,9 @@
 
 ## Overview
 
-The Rust port of `t` (design: [`../docs/designs/rust_port.md`](../docs/designs/rust_port.md)).
-It is built module by module; until step S12 of the design, the zsh script `bin/t` remains the
-command people use, and [`../bin/EGM.md`](../bin/EGM.md) its contract. This file grows with each
-step and describes only what exists in `src/` so far.
-
-The binary `t` implements every command of 0.3.0, and passes 0.3.0's test suite (`test/run.zsh`)
-on macOS and Linux, apart from the checks of what the design changes.
+`t`, the whole command, as one Rust program for macOS, Linux and Windows. It replaced the zsh
+script of 0.3.0 (`bin/t` at the git tag `v0.3.0`); the design of that port, and every deliberate
+difference from 0.3.0, is in [`../docs/designs/rust_port.md`](../docs/designs/rust_port.md).
 
 ## Interface
 
@@ -32,7 +28,7 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 | `t use` (no name) | `[main:use_cmd]` with fzf |
 | `t @<list> <command>` | the command on that list (`[lists:Lists::find]`) |
 
-- `[main:USAGE]`: 0.3.0's usage text, identical to `bin/t`'s (a unit test compares them).
+- `[main:USAGE]`: the usage text, as in 0.3.0.
 - `[main:out]`: every write to stdout. A closed pipe ends the run quietly with status 141 on
   Unix, 1 on Windows; any other write error prints `t: could not write the output: <error>` and
   exits 1.
@@ -293,5 +289,5 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 - Run: `cargo test`: unit tests in each module, and integration tests in `../tests/` that run
   the built `t` in a sandbox (`../tests/common/mod.rs`) whose home directory, config folders and
   lists are all inside a temporary directory, with the environment cleared.
-- Also run `T_BIN=$PWD/target/debug/t test/run.zsh` (0.3.0's suite against the Rust binary, on
-  macOS and Linux); it must end with `N passed, 0 failed`. CI runs it as the parity job.
+- Also run `test/run.zsh` on macOS or Linux after `cargo build`: the checks that need zsh or a
+  terminal, against `target/debug/t`. It must end with `N passed, 0 failed`.

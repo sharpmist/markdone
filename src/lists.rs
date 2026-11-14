@@ -1,7 +1,7 @@
 //! The lists: every `.md` file in the folder of `TODO_FILE`, the default list. Which list a
 //! command uses, and the commands that change the set of lists. See docs/designs/rust_port.md,
 //! "List names", and **Which list**, **What a list is**, **Current list**, **Changing the lists**
-//! and **Old archives** in bin/EGM.md.
+//! and **Old archives** in src/EGM.md.
 
 use std::ffi::OsStr;
 use std::fs;

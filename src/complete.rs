@@ -1,5 +1,5 @@
 //! Tab completion data for `shell/t.zsh`: `t commands` and `t complete <words>`, one line per
-//! choice, `<text to insert>\t<what fzf shows>`. See the output contracts in bin/EGM.md.
+//! choice, `<text to insert>\t<what fzf shows>`. See the output contracts in src/EGM.md.
 
 use std::ffi::OsStr;
 
@@ -270,29 +270,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commands_match_the_zsh_version() {
-        // bin/t prints the same table with printf; compare until the script is removed (S12).
-        let script = include_str!("../bin/t").replace("\r\n", "\n");
-        let start = script.find("  for ins shown desc ex in \\\n").unwrap();
-        let end = start + script[start..].find("  do\n").unwrap();
-        let rows: Vec<&str> = script[start..end].lines().skip(1).collect();
-        assert_eq!(rows.len(), COMMANDS.len(), "one row per command");
+    fn commands_one_line_each() {
         let text = String::from_utf8(commands()).unwrap();
         for (line, (ins, shown, desc, ex)) in text.lines().zip(COMMANDS) {
             assert!(line.starts_with(&format!("{ins}\t")));
-            assert!(line.ends_with(&format!(" e.g. t {ex}")));
             assert!(line.contains(shown) && line.contains(desc));
+            assert!(line.ends_with(&format!(" e.g. t {ex}")));
         }
-        for (r, (ins, shown, desc, ex)) in rows.iter().zip(COMMANDS) {
-            for field in [ins, shown, desc, ex] {
-                let quoted = if field.contains('\'') {
-                    format!("\"{field}\"")
-                } else {
-                    format!("'{field}'")
-                };
-                assert!(r.contains(&quoted), "{field:?} not in {r:?}");
-            }
-        }
+        assert_eq!(text.lines().count(), COMMANDS.len());
     }
 
     #[test]

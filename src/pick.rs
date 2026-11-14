@@ -1,6 +1,6 @@
 //! Finding programs on `PATH` and running fzf, for `t pick` and `t use` without a name; and finding
 //! the item `t pick` chose again after fzf closes. See docs/designs/rust_port.md, "Platform
-//! differences" (fzf, `EDITOR`), and **Picking** in bin/EGM.md.
+//! differences" (fzf, `EDITOR`), and **Picking** in src/EGM.md.
 
 use std::ffi::OsString;
 use std::io::Write;

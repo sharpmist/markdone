@@ -1,7 +1,7 @@
 //! `t init`: creating the list, offering an Obsidian vault for it, and remembering it in the
 //! config file. See docs/designs/rust_port.md, "Configuration" (writing it), and **`init` never
 //! overwrites**, **Where `init` creates the list** and **`init` asks only in a terminal** in
-//! bin/EGM.md.
+//! src/EGM.md.
 
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};

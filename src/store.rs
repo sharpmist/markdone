@@ -1,5 +1,5 @@
 //! Writing a list safely, undo, and the archives. See docs/designs/rust_port.md, "Saving" and
-//! **Writes go through `save`**, **Undo** and **Archive before rewriting** in bin/EGM.md.
+//! **Writes go through `save`**, **Undo** and **Archive before rewriting** in src/EGM.md.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
