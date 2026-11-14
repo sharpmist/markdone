@@ -298,3 +298,15 @@ fn a_name_like_a_pattern_matches_only_that_list() {
     );
     assert_eq!(s.t(&["@Work", "list"]).stdout, "");
 }
+
+#[test]
+fn rename_keeps_the_current_choice_while_todo_list_says_otherwise() {
+    let s = Sandbox::new(EMPTY);
+    s.t(&["lists", "add", "Work"]);
+    s.t(&["use", "Work"]);
+    s.t_with(
+        &["lists", "rename", "Work", "Job"],
+        &[("TODO_LIST", "Todo")],
+    );
+    assert_eq!(read(&s.lists.join(".current")), "Job\n");
+}
