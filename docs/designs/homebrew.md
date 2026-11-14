@@ -1,7 +1,7 @@
 # Install `t` with Homebrew
 
 *   **Author:** sharpmist
-*   **Status:** Proposed
+*   **Status:** In progress
 *   **Date:** 2026-11-14
 
 --------------------------------------------------------------------------------
@@ -49,8 +49,11 @@ None left. Decided:
 The formula installs `shell/t.zsh` to `share/markdone/t.zsh` and prints a caveat:
 
 ```
-source "$(brew --prefix)/share/markdone/t.zsh"   # in ~/.zshrc, after fzf's key bindings
+source "$(brew --prefix)/opt/markdone/share/markdone/t.zsh"   # in ~/.zshrc, after fzf's key bindings
 ```
+
+The formula prints the path with Homebrew's prefix filled in. It uses `opt/markdone`, which stays
+the same across upgrades.
 
 A real `_t` completion file is rejected: it would lose the fzf menu `t.zsh` provides.
 

@@ -21,6 +21,9 @@ Windows. See `README.md` for usage and setup.
 - `shell/t.zsh`: zsh Tab completion (fzf), fed by `t commands` and `t complete <words>`
 - `install`: builds `t` and links it onto `PATH`, and adds Tab completion to `~/.zshrc`
   (`--uninstall` undoes it); macOS and Linux
+- `.github/workflows/release.yml`: on a `v*` tag, builds and publishes the release archives. The
+  Homebrew formula (in the separate `sharpmist/homebrew-tap` repository) installs `t` and
+  `shell/t.zsh` from them: keep the archive names and layout, or change the formula with them.
 - `tests/`: integration tests (`cargo test`, all systems); `test/run.zsh`: the checks that need zsh
   or a terminal
 - `docs/designs/`: design documents (`SITEMAP.md` lists them). `rust_port.md` explains why the
