@@ -59,6 +59,20 @@ So far the binary `t` implements `help` and `version`. Every other command print
 - `[doc:Error]`: why a change can't be made; callers turn it into 0.3.0's messages.
 - `[doc:row]` (`printf "%3d  %-6s %s"`), `[doc:number]`, `[doc:done_rows]` (`t list --done`).
 
+### `lists.rs`: the lists
+
+- `[lists:Lists]`: the lists folder of `TODO_FILE` and the paths in it; `[lists:Lists::list]`
+  gives a `[lists:List]` (name, `[store:Files]`, lock file) for a name.
+- `[lists:Lists::names]`, `[lists:Lists::find]`, `[lists:Lists::current]`, `[lists:check_name]`,
+  `[lists:open_count]`.
+- `[lists:Lists::show]`, `[lists:Lists::lines]`, `[lists:Lists::json]`: `t lists`, plain, tabbed
+  (for Tab completion) and `--json`.
+- `[lists:Lists::add]`, `[lists:Lists::remove]`, `[lists:Lists::rename]`,
+  `[lists:Lists::use_list]`: `t lists add|rm|rename` and `t use <name>`, each under
+  `[lists:Lists::dir_lock]`.
+- `[lists:Lists::old_archives]`, `[lists:Lists::migrate_archives]`: archives from before there
+  were several lists.
+
 ### `lock.rs`: one run at a time
 
 - `[lock:take]`: the lock on a lock file (`[lock:What]`: a list's or the lists folder's), waiting
@@ -121,6 +135,28 @@ So far the binary `t` implements `help` and `version`. Every other command print
   changes.
 - **Item references.** Digits only are a number (leading zeros allowed); other text must be a
   case-insensitive, literal substring of exactly one open item's text as a terminal shows it.
+- **What a list is.** The regular files (not symlinks, not hidden) ending in `.md` directly in the
+  lists folder, except `Archive <digits>`, plus the default list when its file exists (a symlink
+  there counts); names sorted by bytes. A list's name is its file name without `.md`; the
+  default list's is its file name up to the last `.`. Hidden files are named after the full file
+  name (`.Todo.md.lock`, `.Todo.md.bak`, `.Todo.md.sum`).
+- **Which list.** `find` takes an exact name, else the only list matching ignoring case.
+  `current`: `TODO_LIST` (no match is an error, also for `t lists` and `t lists rm`), else the
+  name in `.current` (trailing CR and LF dropped; a gone list warns and falls back), else the
+  default list.
+- **New names** (`lists add`, `lists rename`) must not be empty, contain `/ \ : * ? " < > |` or
+  a byte below 0x20, start with `.` or `@`, end with `.`, a space or `.md`, be `Archive <digits>`,
+  be a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9`, `COM¹`–`COM³`,
+  `LPT¹`–`LPT³`, any case, alone or before a `.`), or match another list ignoring case.
+- **Changing the lists.** `add`, `remove`, `rename` and `use_list` hold the folder's lock;
+  `remove` and `rename` also take the list's lock, after the folder's, and release it before
+  deleting its lock file. `remove` refuses the default list, the current list and, unless forced,
+  a list with open items, and keeps the archives. `rename` refuses the default list, moves the
+  file, its backup and checksum and its archives, and keeps `t use`'s choice. `.current` is
+  written through a temp file and a rename. Messages are 0.3.0's.
+- **Old archives.** `Archive <digits>.md` in the lists folder moves to
+  `Archive/<default list> <year>.md`, or its done items are appended there sorted; a failure
+  warns and leaves the file.
 - **Locks.** The lock file is opened for reading and writing, created empty when missing, never
   truncated. A lock belongs to an open handle, not to the process: a run must hold at most one
   lock per lock file, since a second handle waits and fails. Messages are 0.3.0's
@@ -158,6 +194,8 @@ So far the binary `t` implements `help` and `version`. Every other command print
 
 - `[config:load]` reads the environment and the config file; it never writes.
 - `[lock:take]` creates empty lock files and holds locks on them.
+- `[lists:Lists]` creates, deletes and renames list files, their hidden files and archives,
+  writes or deletes `.current`, creates `.lists.lock`, and moves old archives.
 - `[store:save]` writes the list, its backup and its checksum file; `[store:undo]` the same;
   `[store:archive]` creates the archive folder and creates or appends to archive files.
 - `[text:styled_stdout]` on Windows may switch the console to escape-sequence mode.

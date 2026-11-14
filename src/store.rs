@@ -167,6 +167,18 @@ pub fn archive(adir: &Path, list: &[u8], lines: &[Vec<u8>], crlf: bool) -> Resul
     Ok(())
 }
 
+/// Appends lines to an existing file, with the file's own line ending (LF when it has none yet).
+pub fn append_lines(path: &Path, lines: &[Vec<u8>]) -> io::Result<()> {
+    let crlf = ending_of(&fs::read(path)?).unwrap_or(false);
+    let eol: &[u8] = if crlf { b"\r\n" } else { b"\n" };
+    let mut out = Vec::new();
+    for l in lines {
+        out.extend_from_slice(l);
+        out.extend_from_slice(eol);
+    }
+    OpenOptions::new().append(true).open(path)?.write_all(&out)
+}
+
 /// Whether a file's first line ends in CRLF; `None` when it has no newline.
 fn ending_of(bytes: &[u8]) -> Option<bool> {
     let nl = bytes.iter().position(|&b| b == b'\n')?;

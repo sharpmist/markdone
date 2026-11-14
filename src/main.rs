@@ -12,6 +12,8 @@ mod doc;
 #[allow(dead_code)]
 mod jira;
 #[allow(dead_code)]
+mod lists;
+#[allow(dead_code)]
 mod lock;
 #[allow(dead_code)]
 mod store;
