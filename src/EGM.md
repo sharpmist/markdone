@@ -38,6 +38,14 @@ So far the binary `t` implements `help` and `version`. Every other command print
   padding for case-insensitive matching and aligned columns.
 - `[text:shell_quote]`: a list name quoted as zsh's `${(q-)name}` does.
 
+### `jira.rs`: Jira linking
+
+- `[jira:check_jira]`: validates `TODO_JIRA_KEYS` and `TODO_JIRA_URL`; returns the settings
+  (`[jira:Jira]`) when linking is on, else a warning (none when the keys are blank). The
+  warnings are 0.3.0's three.
+- `[jira:linkify]`: an item's text with each bare key turned into `[KEY-123](<url>KEY-123)`.
+- `[jira:keys_in]`: the keys in an item's text, for `t list --json`.
+
 ### `config.rs`: settings
 
 - `[config:load]`: the settings of this run (`[config:Settings]`): `todo_file` and where it came
@@ -55,6 +63,16 @@ So far the binary `t` implements `help` and `version`. Every other command print
 - **Web links.** `[text]` not empty and without `]`, then `(http://` or `(https://`, at least
   one byte, none of them `)` or ASCII white space (space, tab, LF, VT, FF, CR), then `)`. They
   are found left to right without overlaps, each starting at the leftmost `[` that begins one.
+- **Jira linking is all or nothing.** Keys are split at spaces, tabs, newlines and NUL; each must
+  match `^[A-Z][A-Z0-9_]*$`, and the URL must be `http://` or `https://`, at least two more
+  bytes, ending in `/`. Otherwise linking is off, with a warning.
+- **What linking touches.** Scanning left to right, Markdown links (the text may be empty),
+  inline code and bare URLs (up to ASCII white space) are copied unchanged; a key is one of the
+  configured keys, `-` and ASCII digits, with no word byte, `/` or `-` before it and no word byte
+  or `-` after the digits ("word" is ASCII letters, digits and `_`). Linking its own output
+  changes nothing.
+- **Keys for JSON** use the key test alone, at every position, so keys inside links and code
+  count; each key once, in order of first appearance.
 - **Settings sources.** `TODO_FILE`, `TODO_JIRA_KEYS` and `TODO_JIRA_URL` come from the
   environment variable when it is set, else the config file, else the default. An empty
   environment value stops the lookup and means the default (`~/todo/Todo.md`; Jira linking
