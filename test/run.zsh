@@ -88,7 +88,7 @@ check "file unchanged after errors" "$before" "$(file)"
 run help;  check "help exits 0" 0 "$rc"; [[ $out == *"t add [--later] <text>"* ]]; check "help text" 0 $?
 run --help; check "--help exits 0" 0 "$rc"
 export TODO_FILE="/nonexistent/Todo.md"   # version must work without a list
-run version;   [[ $out == "t "<->.<->.<-> ]]; check "version: t <major>.<minor>.<patch>, exit 0" "0|0" "$?|$rc"
+run version;   [[ $out == "t "<->.<->.<->(-dev|) ]]; check "version: t <major>.<minor>.<patch>, exit 0" "0|0" "$?|$rc"
 v=$out; run --version; check "--version" "$v" "$out"
 
 # --- tidy: dating, moving and archiving ---
@@ -1079,8 +1079,9 @@ check "old archives move to the default list's, also when another list is named"
 run list --done --all; check "moved archives still show with list --done --all" "2020-05-01  Ancient" "$out"
 
 # names are text, never patterns
-fresh "$EMPTY"; run lists add Work; run lists add 'W*'
-run @'w*' add star;      check "a name with * matches only that list" "Added 1 (Today): star" "$out"
+# (W[o]rk, as a pattern, would match Work; * isn't allowed in new names since 0.4.0.)
+fresh "$EMPTY"; run lists add Work; run lists add 'W[o]rk'
+run @'w[o]rk' add star;  check "a name like a pattern matches only that list" "Added 1 (Today): star" "$out"
 run @Work list;          check "the other list is untouched" "" "$out"
 # rename keeps the list current by t use's choice, even while TODO_LIST says otherwise
 run use Work; out=$(TODO_LIST=Todo "$T_BIN" lists rename Work Job 2>&1)

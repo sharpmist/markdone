@@ -7,22 +7,45 @@ It is built module by module; until step S12 of the design, the zsh script `bin/
 command people use, and [`../bin/EGM.md`](../bin/EGM.md) its contract. This file grows with each
 step and describes only what exists in `src/` so far.
 
-So far the binary `t` implements `help` and `version`. Every other command prints
-`t: '<command>' isn't in the Rust port yet; use bin/t` (or, with no command,
-`t: listing isn't in the Rust port yet; use bin/t`) and exits 1.
+The binary `t` implements every command of 0.3.0 except `init`, `pick`, `edit` and `use` without
+a name, which print `t: t <command> isn't in the Rust port yet; use bin/t` (or, for `use`,
+0.3.0's usage message) and exit 1 until steps S8 and S9.
 
 ## Interface
 
-### `main.rs`
+### `main.rs`: dispatch
 
-- `t help`, `-h`, `--help`: prints 0.3.0's usage text (`[main:USAGE]`), identical to `bin/t`'s;
-  a unit test compares the two.
-- `t version`, `--version`: `t <version from Cargo.toml>`.
+Commands, dispatched in 0.3.0's order by `[main:run]`:
+
+| Command | Handler |
+|---|---|
+| `t help`, `-h`, `--help`; `t version`, `--version`; `t commands` | printed without loading the settings |
+| `t lists [--json]`, `t lists add|rm [--force]|rename …` | `[main:lists_cmd]`, `[lists:Lists]` |
+| `t use <list>` | `[main:use_cmd]`, `[lists:Lists::use_list]` |
+| `t complete <words>` | `[complete:words]`, and for item commands `[complete:items]` after locking and tidying |
+| `t`, `t list [--today|--later|--done [--all]|--json]` | `[main:list_cmd]` |
+| `t add [--later] <text>`, `done`, `today`, `later`, `rm`, `reword` | `[main:run]` with `[doc:Doc]` |
+| `t move <item> @<list>` | `[main:run]`: both lists locked in path order and tidied |
+| `t undo` | `[store:undo]`, before tidy |
+| `t @<list> <command>` | the command on that list (`[lists:Lists::find]`) |
+
+- `[main:USAGE]`: 0.3.0's usage text, identical to `bin/t`'s (a unit test compares them).
 - `[main:out]`: every write to stdout. A closed pipe ends the run quietly with status 141 on
   Unix, 1 on Windows; any other write error prints `t: could not write the output: <error>` and
   exits 1.
-- Arguments that aren't valid Unicode: `t: arguments must be valid text`, exit 1 (until step S7
-  accepts byte arguments on Unix).
+- `[main:tidy]`: reads a list, tidies it, and saves when that changed it; archives first.
+- `[main:Locks]`: the locks of a run, at most one per lock file.
+- Arguments are bytes on Unix; on Windows one that isn't valid Unicode stops `t` with
+  `t: arguments must be valid text`.
+
+### `complete.rs`: Tab completion data
+
+- `[complete:commands]`: `t commands`, one line per command, `<insert>\t<shown, description,
+  example>`, the same table as 0.3.0's.
+- `[complete:words]`: what Tab offers after `t <words> ` (`[complete:Complete]`): printed at once,
+  or a list's items, which the caller offers after locking and tidying that list.
+- `[complete:items]`: the open items an item command can take.
+- `[complete:ITEM_CMDS]`: the commands that take an `<item>`.
 
 ### `text.rs`: pure text helpers
 
@@ -114,6 +137,22 @@ So far the binary `t` implements `help` and `version`. Every other command print
   changes nothing.
 - **Keys for JSON** use the key test alone, at every position, so keys inside links and code
   count; each key once, in order of first appearance.
+- **Dispatch order.** A first `@<list>` is taken off. `help`, `version` and `commands` need no
+  settings. Then the settings are loaded (their warnings and the upgrade warning printed), and
+  `init`, `lists`, `use` and `complete` (unless it offers items) run without reading a list.
+  Otherwise: the list is chosen and must exist; `move` finds its target; old archives are moved
+  under the default list's lock (kept when the run needs that list anyway); the list is locked
+  (both, in byte order of their paths, for `move`); `undo` runs and exits; `check_jira`; the
+  target (for `move`) and the list are tidied; the command runs. An unknown command is found
+  only then: `t: unknown command '<word>'` and the usage on stderr, exit 1.
+- **Writes.** Every command builds the new list in memory and saves it through `[store:save]`
+  only when the change succeeded. `move` saves the target first, then the source.
+- **Messages.** Success messages and errors are 0.3.0's; messages with item text go through
+  `[text:render]`.
+- **Upgrade warning.** When `TODO_FILE` comes from the default and `${ZDOTDIR:-$HOME}/.zshenv`
+  mentions `TODO_FILE` (macOS and Linux): `<.zshenv> sets TODO_FILE, but t no longer reads it;
+  put this line in <config file>: TODO_FILE=<path>`, the path from 0.3's marked line, else
+  `<path>`.
 - **Bytes.** `doc.rs` works on bytes; only matching decodes them (invalid UTF-8 as U+FFFD).
 - **Lines.** Split at LF; a CR before the LF is the line's ending, not its content. An empty file
   has no lines. A leading UTF-8 byte order mark belongs to no line and is written back. The
@@ -203,4 +242,8 @@ So far the binary `t` implements `help` and `version`. Every other command print
 
 ## Verification
 
-- Run: `cargo test` (unit tests in each module).
+- Run: `cargo test`: unit tests in each module, and integration tests in `../tests/` that run
+  the built `t` in a sandbox (`../tests/common/mod.rs`) whose home directory, config folders and
+  lists are all inside a temporary directory, with the environment cleared.
+- Also run `T_BIN=$PWD/target/debug/t test/run.zsh` (0.3.0's suite against the Rust binary); it
+  must pass from step S9 on.

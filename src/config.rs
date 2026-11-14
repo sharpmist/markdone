@@ -295,6 +295,64 @@ pub fn display(path: &Path, home: Option<&Path>) -> String {
     }
 }
 
+/// The marker 0.3's `t init` wrote above its `TODO_FILE` line in `.zshenv`.
+const ZSHENV_MARK: &[u8] = b"# markdone: where t keeps the list (set by t init)";
+
+/// The path in 0.3's marked `.zshenv` line, `export TODO_FILE="${TODO_FILE:-<value>}"`, unescaped
+/// and with a leading `$HOME` as `~`; `None` without such a line.
+fn marked_path(zshenv: &[u8]) -> Option<String> {
+    let lines: Vec<&[u8]> = zshenv
+        .split(|&b| b == b'\n')
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        .collect();
+    let at = lines.windows(2).rposition(|w| w[0] == ZSHENV_MARK)?;
+    let value = lines[at + 1]
+        .strip_prefix(b"export TODO_FILE=\"${TODO_FILE:-")?
+        .strip_suffix(b"}\"")?;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < value.len() {
+        if value[i] == b'\\' && i + 1 < value.len() {
+            i += 1;
+        }
+        out.push(value[i]);
+        i += 1;
+    }
+    let mut path = String::from_utf8_lossy(&out).into_owned();
+    if let Some(rest) = path.strip_prefix("$HOME") {
+        path = format!("~{rest}");
+    }
+    Some(path)
+}
+
+/// The warning for people upgrading from 0.3 (macOS and Linux): when `TODO_FILE` comes from the
+/// default but `${ZDOTDIR:-$HOME}/.zshenv` mentions `TODO_FILE`, which `t` no longer reads. No
+/// value is taken from `.zshenv`.
+pub fn upgrade_warning(s: &Settings) -> Option<String> {
+    if cfg!(windows) || s.todo_file_source != Source::Default {
+        return None;
+    }
+    let zdot = std::env::var_os("ZDOTDIR")
+        .filter(|z| !z.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| s.home.clone())?;
+    let zshenv = zdot.join(".zshenv");
+    let bytes = std::fs::read(&zshenv).ok()?;
+    if !bytes.windows(9).any(|w| w == b"TODO_FILE") {
+        return None;
+    }
+    let path = marked_path(&bytes).unwrap_or_else(|| "<path>".to_string());
+    let config = s
+        .config_file
+        .as_deref()
+        .map(|c| display(c, s.home.as_deref()))
+        .unwrap_or_else(|| "the config file".to_string());
+    Some(format!(
+        "{} sets TODO_FILE, but t no longer reads it; put this line in {config}: TODO_FILE={path}",
+        display(&zshenv, s.home.as_deref())
+    ))
+}
+
 /// Today in the local time zone (which honours `TZ`, as `date +%F` does).
 pub fn today() -> chrono::NaiveDate {
     chrono::Local::now().date_naive()
@@ -557,6 +615,20 @@ mod tests {
             let upper = PathBuf::from(r"c:\USERS\ME\notes");
             assert_eq!(display(&upper, Some(&h)), r"~\notes");
         }
+    }
+
+    #[test]
+    fn the_path_in_0_3s_marked_zshenv_line() {
+        let zshenv = b"export PATH=x\n\n# markdone: where t keeps the list (set by t init)\nexport TODO_FILE=\"${TODO_FILE:-$HOME/notes/My \\\"Todo\\\" \\$1.md}\"\n";
+        assert_eq!(
+            marked_path(zshenv).as_deref(),
+            Some("~/notes/My \"Todo\" $1.md")
+        );
+        assert_eq!(
+            marked_path(b"# markdone: where t keeps the list (set by t init)\r\nexport TODO_FILE=\"${TODO_FILE:-/srv/Todo.md}\"\r\n").as_deref(),
+            Some("/srv/Todo.md")
+        );
+        assert_eq!(marked_path(b"export TODO_FILE=/x/Todo.md\n"), None);
     }
 
     #[test]
