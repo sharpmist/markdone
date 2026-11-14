@@ -462,7 +462,9 @@ fresh "$EMPTY"
 out=$(TODO_JIRA_KEYS="  PROJ   P2_X  " "$T_BIN" add "PROJ-1 P2_X-2 PROJX-3" 2>&1)
 check "keys with digits/underscores, extra spaces" "Added 1 (Today): $(L PROJ-1) $(L P2_X-2) PROJX-3" "$out"
 
-# perl failing while linking is on: stop with an error, never touch the list
+# perl failing while linking is on: stop with an error, never touch the list (the zsh version only;
+# the Rust t doesn't use perl)
+if [[ $impl == zsh ]]; then
 noperl=$(mktemp -d); dirs+=$noperl
 printf '#!/bin/sh\nexit 127\n' >"$noperl/perl"; chmod +x "$noperl/perl"
 fresh "## Today
@@ -478,6 +480,7 @@ check "perl failure: add fails" 1 "$rc"
 check "perl failure: list file untouched" "$before" "$(file)"
 out=$(PATH="$noperl:$PATH" TODO_JIRA_KEYS= "$T_BIN" add new 2>&1)
 check "perl not needed with linking off" "Added 2 (Today): new" "$out"
+fi
 
 # --- t commands (used by Tab completion) ---
 export TODO_FILE="/nonexistent/Todo.md"   # must work without a list
@@ -674,6 +677,8 @@ tab 't done ';   check "Tab with no list falls back"                   't done X
 zpty -d TT
 
 # --- configuration from ~/.zshenv, in the form README.md recommends ---
+# The zsh version only: the Rust t takes settings from a config file instead (tests/config.rs).
+if [[ $impl == zsh ]]; then
 zdot=$(mktemp -d); dirs+=$zdot
 fresh "$EMPTY"; other=$TODO_FILE
 print -r -- 'export TODO_FILE="${TODO_FILE:-'"$other"'}"' >"$zdot/.zshenv"
@@ -683,6 +688,7 @@ check "a TODO_FILE given by the caller wins over ~/.zshenv" "Added 1 (Today): mi
 check "~/.zshenv's TODO_FILE untouched" "$EMPTY" "$(<"$other")"$'\n'
 out=$(unset TODO_FILE; ZDOTDIR=$zdot "$T_BIN" add theirs 2>&1)
 check "~/.zshenv fills in TODO_FILE when unset" "Added 1 (Today): theirs" "$out"
+fi
 
 # --- edit ---
 fresh "$EMPTY"
@@ -969,6 +975,22 @@ ttyinit() { # <answers> <args...>: the same in a terminal, typing the answers; s
   buf=${buf//$'\r'/}; rc=${${buf##*<rc=}%%>*}; out=${${buf%<rc=*}%$'\n'}
 }
 MARK='# markdone: where t keeps the list (set by t init)'
+# Where t init remembers the list: ~/.zshenv for the zsh version, the config file for the Rust one.
+#   cfgname: the file as messages show it; cfgfile: its path in $home;
+#   cfgline <path under ~>: the line t shows; cfgsaved <path under ~>: what t writes there.
+if [[ $impl == zsh ]]; then
+  cfgname='~/.zshenv'
+  cfgfile() { print -r -- "$home/.zshenv"; }
+  cfgline() { print -r -- "export TODO_FILE=\"\${TODO_FILE:-\$HOME/$1}\""; }
+  cfgsaved() { print -r -- "$MARK"; cfgline "$1"; }
+  extra='export EDITOR=vi'
+else
+  cfgname='~/.config/markdone/config'
+  cfgfile() { print -r -- "$home/.config/markdone/config"; }
+  cfgline() { print -r -- "TODO_FILE=~/$1"; }
+  cfgsaved() { cfgline "$1"; }
+  extra='# my own line'
+fi
 
 vhome Work Notes
 ttyinit $'2\ny' init --obsidian
@@ -976,44 +998,48 @@ check "init --obsidian: lists vaults, newest first, and creates the list in Todo
   1  $home/Vaults/Notes
   2  $home/Vaults/Work
 Which one should hold the list? [1] Created $home/Vaults/Work/Todo/Todo.md
-Use this list from now on, also from AI agents? This adds TODO_FILE to ~/.zshenv. [Y/n] Saved in ~/.zshenv: t now uses $home/Vaults/Work/Todo/Todo.md" "$rc|$out"
+Use this list from now on, also from AI agents? This adds TODO_FILE to $cfgname. [Y/n] Saved in $cfgname: t now uses $home/Vaults/Work/Todo/Todo.md" "$rc|$out"
 check "init --obsidian: the list has the three headings" "$EMPTY" "$(<"$home/Vaults/Work/Todo/Todo.md")"$'\n'
-check "init --obsidian: ~/.zshenv gets one marked line" "$MARK
-export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Work/Todo/Todo.md}\"" "$(<"$home/.zshenv")"
+check "init --obsidian: $cfgname gets one line" "$(cfgsaved Vaults/Work/Todo/Todo.md)" "$(<"$(cfgfile)")"
 tinit add "from the vault"
 check "after init --obsidian, t uses the vault's list" "0|Added 1 (Today): from the vault" "$rc|$out"
-print -r -- 'export EDITOR=vi' >>"$home/.zshenv"
+print -r -- "$extra" >>"$(cfgfile)"
 ttyinit $'\n' init --obsidian
-check "init --obsidian again: Enter picks the newest vault and saves" "0|Saved in ~/.zshenv: t now uses $home/Vaults/Notes/Todo/Todo.md" "$rc|${${(f)out}[-1]##*\] }"
-check "init --obsidian again: the earlier line is replaced, the rest kept" "export EDITOR=vi
+check "init --obsidian again: Enter picks the newest vault and saves" "0|Saved in $cfgname: t now uses $home/Vaults/Notes/Todo/Todo.md" "$rc|${${(f)out}[-1]##*\] }"
+if [[ $impl == zsh ]]; then
+  check "init --obsidian again: the earlier line is replaced, the rest kept" "$extra
 
-$MARK
-export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Notes/Todo/Todo.md}\"" "$(<"$home/.zshenv")"
+$(cfgsaved Vaults/Notes/Todo/Todo.md)" "$(<"$(cfgfile)")"
+else
+  check "init --obsidian again: the earlier line is replaced in place, the rest kept" "$(cfgsaved Vaults/Notes/Todo/Todo.md)
+$extra" "$(<"$(cfgfile)")"
+fi
 ttyinit 1 init --obsidian
 check "init --obsidian: an existing list is used as it is" \
-  "$home/Vaults/Notes/Todo/Todo.md already exists; using it as it is|~/.zshenv already points t at this list" \
+  "$home/Vaults/Notes/Todo/Todo.md already exists; using it as it is|$cfgname already points t at this list" \
   "${${(@f)out}[-2]##*\] }|${${(@f)out}[-1]}"
 
 vhome Solo
 ttyinit n init --obsidian
 check "init --obsidian, one vault, not saved: shows the line" "0|Obsidian vault: $home/Vaults/Solo
 Created $home/Vaults/Solo/Todo/Todo.md
-Use this list from now on, also from AI agents? This adds TODO_FILE to ~/.zshenv. [Y/n] Not saved. To use the list, add this to ~/.zshenv:
-  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|$out"
-[[ ! -e $home/.zshenv ]]; check "init --obsidian, not saved: no ~/.zshenv written" 0 $?
+Use this list from now on, also from AI agents? This adds TODO_FILE to $cfgname. [Y/n] Not saved. To use the list, add this to $cfgname:
+  $(cfgline Vaults/Solo/Todo/Todo.md)" "$rc|$out"
+[[ ! -e $(cfgfile) ]]; check "init --obsidian, not saved: no $cfgname written" 0 $?
 
 vhome Solo
 tinit init --obsidian
 check "init --obsidian without a terminal, one vault: asks nothing, shows the line" "0|Obsidian vault: $home/Vaults/Solo
 Created $home/Vaults/Solo/Todo/Todo.md
-To use it, add this to ~/.zshenv:
-  export TODO_FILE=\"\${TODO_FILE:-\$HOME/Vaults/Solo/Todo/Todo.md}\"" "$rc|$out"
+To use it, add this to $cfgname:
+  $(cfgline Vaults/Solo/Todo/Todo.md)" "$rc|$out"
 vhome Work Notes
 tinit init --obsidian
 check "init --obsidian without a terminal, several vaults: fails, listing them" "1|t: found 2 Obsidian vaults; run t init --obsidian in a terminal to choose one, or t init <path>:
   $home/Vaults/Notes
   $home/Vaults/Work" "$rc|$out"
 
+if [[ $impl == zsh ]]; then
 vhome Solo; print -r -- 'export TODO_FILE="$HOME/elsewhere.md"' >"$home/.zshenv"
 before=$(<"$home/.zshenv")
 ttyinit "" init --obsidian
@@ -1027,6 +1053,21 @@ vhome 'My "odd" $vault'
 ttyinit y init --obsidian
 check "init --obsidian: odd vault names are quoted for ~/.zshenv" "$home/Vaults/My \"odd\" \$vault/Todo/Todo.md" \
   "$(HOME=$home zsh -fc 'unset TODO_FILE; source "$HOME/.zshenv"; print -r -- $TODO_FILE')"
+else
+# The config file has one TODO_FILE line: t init replaces it, keeping the other lines.
+vhome Solo; mkdir -p "${$(cfgfile):h}"; print -r -- $'TODO_FILE=/elsewhere.md\nTODO_JIRA_KEYS=PROJ' >"$(cfgfile)"
+ttyinit y init --obsidian
+check "init --obsidian: an earlier TODO_FILE line in the config is replaced" \
+  "0|Saved in $cfgname: t now uses $home/Vaults/Solo/Todo/Todo.md" "$rc|${${(f)out}[-1]##*\] }"
+check "init --obsidian: the config keeps its other lines" "$(cfgsaved Vaults/Solo/Todo/Todo.md)
+TODO_JIRA_KEYS=PROJ" "$(<"$(cfgfile)")"
+
+# Values aren't quoted or expanded, so any vault name is written as it is.
+vhome 'My "odd" vault'
+ttyinit y init --obsidian
+check "init --obsidian: odd vault names are written as they are" "$(cfgsaved 'Vaults/My "odd" vault/Todo/Todo.md')" "$(<"$(cfgfile)")"
+tinit add "odd"; check "init --obsidian: t uses the list in the odd vault" "0|Added 1 (Today): odd" "$rc|$out"
+fi
 
 vhome Work Notes
 ttyinit 7 init --obsidian; check "init --obsidian: a choice out of range fails" "1|t: no choice '7'; nothing done" "$rc|${${(f)out}[-1]##*\] }"
@@ -1041,12 +1082,12 @@ tinit init --obsidian
 check "init --obsidian without vaults fails" \
   "1|t: found no Obsidian vaults (Obsidian lists a vault once you've opened it); use t init <path> instead" "$rc|$out"
 
-# t init <path>: never asks; shows the ~/.zshenv line. ${home:A}: on macOS, /var is a symlink.
+# t init <path>: never asks; shows the line that makes t use it. ${home:A}: on macOS, /var is a symlink.
 home=$(mktemp -d); dirs+=$home; home=${home:A}
 out=$(unset TODO_FILE; cd "$home"; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData "$T_BIN" init "lists/Todo.md" </dev/null 2>&1); rc=$?
-check "init <path>: relative to the current directory, shows the ~/.zshenv line" "0|Created $home/lists/Todo.md
-To use it, add this to ~/.zshenv:
-  export TODO_FILE=\"\${TODO_FILE:-\$HOME/lists/Todo.md}\"" "$rc|$out"
+check "init <path>: relative to the current directory, shows the $cfgname line" "0|Created $home/lists/Todo.md
+To use it, add this to $cfgname:
+  $(cfgline lists/Todo.md)" "$rc|$out"
 tinit init "$home/lists/Todo.md"; check "init <path> refuses an existing list" "1|t: $home/lists/Todo.md already exists; not changed" "$rc|$out"
 tinit init a b; check "init with two paths fails" "1|t: usage: t init [<path> | --obsidian]" "$rc|$out"
 
@@ -1057,7 +1098,7 @@ check "plain init without a terminal: the default place, no questions" "0|Create
 vhome Solo
 ttyinit $'y\ny' init
 check "plain init in a terminal offers the vault" "0|Keep the list in your Obsidian vault, in $home/Vaults/Solo/Todo? [Y/n] Created $home/Vaults/Solo/Todo/Todo.md" "$rc|${(F)${(@f)out}[1]}"
-[[ -f $home/Vaults/Solo/Todo/Todo.md && ! -e $home/todo && -f $home/.zshenv ]]; check "plain init in a terminal: list made in the vault, and saved" 0 $?
+[[ -f $home/Vaults/Solo/Todo/Todo.md && ! -e $home/todo && -f $(cfgfile) ]]; check "plain init in a terminal: list made in the vault, and saved" 0 $?
 vhome Solo
 ttyinit n init
 check "plain init in a terminal, vault declined: the default place" "0|Keep the list in your Obsidian vault, in $home/Vaults/Solo/Todo? [Y/n] Created $home/todo/Todo.md" "$rc|$out"

@@ -6,6 +6,7 @@
 mod complete;
 mod config;
 mod doc;
+mod init;
 mod jira;
 mod lists;
 mod lock;
@@ -320,7 +321,16 @@ fn run() -> R {
     // Commands that work on the lists themselves.
     let mut complete_cmd = None;
     match cmd.as_slice() {
-        b"init" => return die("t init isn't in the Rust port yet; use bin/t"),
+        b"init" => {
+            let mut warnings = Vec::new();
+            let result = init::init(&a[1..], &settings, &mut warnings);
+            if let Ok(text) = &result {
+                out(text.as_bytes())?;
+            }
+            warn_all(&mut warnings);
+            result?;
+            return Ok(());
+        }
         b"lists" => return lists_cmd(&lists, &settings, &a[1..]),
         b"use" => return use_cmd(&lists, &settings, &a[1..]),
         b"complete" => match complete::words(&lists, todo_list, &a[1..]) {

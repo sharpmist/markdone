@@ -211,6 +211,48 @@ fn resolve(
     })
 }
 
+/// The list the config file's last valid `TODO_FILE` line names, if any (for `t init`).
+pub fn todo_file_in(bytes: &[u8], home: Option<&Path>) -> Option<PathBuf> {
+    let (entries, _) = parse(bytes, "");
+    let mut found = None;
+    for e in entries.iter().filter(|e| e.name == "TODO_FILE") {
+        if let Some(rest) = after_tilde(&e.value) {
+            if let Some(h) = home {
+                found = Some(h.join(bytes_path(rest)));
+            }
+        } else if !e.value.is_empty() && bytes_path(&e.value).is_absolute() {
+            found = Some(bytes_path(&e.value));
+        }
+    }
+    found
+}
+
+/// `path` made absolute against the current directory, with `.` and `..` removed by position and
+/// symlinks left alone, like zsh's `${path:a}`.
+pub fn absolute(path: &Path) -> PathBuf {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut out = PathBuf::new();
+    for c in joined.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !matches!(
+                    out.components().next_back(),
+                    Some(Component::RootDir) | None
+                ) {
+                    out.pop();
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// The default list, `~/todo/Todo.md`.
 fn default_list(home: Option<&Path>) -> Result<PathBuf, String> {
     Ok(home.ok_or(NO_HOME)?.join("todo").join("Todo.md"))

@@ -7,9 +7,9 @@ It is built module by module; until step S12 of the design, the zsh script `bin/
 command people use, and [`../bin/EGM.md`](../bin/EGM.md) its contract. This file grows with each
 step and describes only what exists in `src/` so far.
 
-The binary `t` implements every command of 0.3.0 except `init`, `pick`, `edit` and `use` without
-a name, which print `t: t <command> isn't in the Rust port yet; use bin/t` (or, for `use`,
-0.3.0's usage message) and exit 1 until steps S8 and S9.
+The binary `t` implements every command of 0.3.0 except `pick`, `edit` and `use` without a name,
+which print `t: t <command> isn't in the Rust port yet; use bin/t` (or, for `use`, 0.3.0's usage
+message) and exit 1 until step S9.
 
 ## Interface
 
@@ -20,6 +20,7 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 | Command | Handler |
 |---|---|
 | `t help`, `-h`, `--help`; `t version`, `--version`; `t commands` | printed without loading the settings |
+| `t init [<path> | --obsidian]` | `[init:init]` |
 | `t lists [--json]`, `t lists add|rm [--force]|rename …` | `[main:lists_cmd]`, `[lists:Lists]` |
 | `t use <list>` | `[main:use_cmd]`, `[lists:Lists::use_list]` |
 | `t complete <words>` | `[complete:words]`, and for item commands `[complete:items]` after locking and tidying |
@@ -37,6 +38,12 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 - `[main:Locks]`: the locks of a run, at most one per lock file.
 - Arguments are bytes on Unix; on Windows one that isn't valid Unicode stops `t` with
   `t: arguments must be valid text`.
+
+### `init.rs`: creating the list
+
+- `[init:init]`: `t init`, `t init <path>`, `t init --obsidian`.
+- `[init:obsidian_vaults]`: the vaults in Obsidian's `obsidian.json` (macOS, Linux, Flatpak,
+  Snap and Windows locations), most recently opened first.
 
 ### `complete.rs`: Tab completion data
 
@@ -153,6 +160,23 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
   mentions `TODO_FILE` (macOS and Linux): `<.zshenv> sets TODO_FILE, but t no longer reads it;
   put this line in <config file>: TODO_FILE=<path>`, the path from 0.3's marked line, else
   `<path>`.
+- **`init` never overwrites.** It stops when anything, a dangling symlink included, is at the
+  target; the one exception is an existing regular file in a vault, used as it is. Otherwise it
+  creates the folders and writes the three headings.
+- **Where `init` creates the list.** `t init <path>`: at `<path>` made absolute against the
+  working directory, `.` and `..` removed by position, symlinks left alone; then it shows the
+  config line for it when it isn't the list `t` uses already, and never asks or writes.
+  `t init --obsidian`: `<vault>/Todo/Todo.md`. Plain `t init`: at `TODO_FILE`, but when
+  `TODO_FILE` comes from the default and stdin and stdout are a terminal, it first offers the
+  vaults.
+- **`init` asks only in a terminal.** Without one, a single vault is taken and several are an
+  error listing them, and the config line is shown, not written. Vault prompts go to stderr; the
+  question about the config file and its messages go to stdout, as in 0.3.0. An answer that is
+  empty or starts with `y`/`Y` is yes; end of input stops with `no answer; nothing done`.
+- **Remembering the list.** After a yes, `TODO_FILE=<path>` (`~` and the rest under the home
+  directory) replaces the config file's last `TODO_FILE` line, or is appended; other lines stay;
+  the file is written in place. When the config already names the list, nothing is asked. When
+  `TODO_FILE` is set in the environment to something else, a warning says it still wins.
 - **Bytes.** `doc.rs` works on bytes; only matching decodes them (invalid UTF-8 as U+FFFD).
 - **Lines.** Split at LF; a CR before the LF is the line's ending, not its content. An empty file
   has no lines. A leading UTF-8 byte order mark belongs to no line and is written back. The
@@ -232,6 +256,8 @@ Commands, dispatched in 0.3.0's order by `[main:run]`:
 ## Side Effects
 
 - `[config:load]` reads the environment and the config file; it never writes.
+- `[init:init]` creates the list and its folders, reads Obsidian's `obsidian.json`, and writes
+  the config file (only after a yes in a terminal).
 - `[lock:take]` creates empty lock files and holds locks on them.
 - `[lists:Lists]` creates, deletes and renames list files, their hidden files and archives,
   writes or deletes `.current`, creates `.lists.lock`, and moves old archives.
