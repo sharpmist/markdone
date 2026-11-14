@@ -1,8 +1,15 @@
 #!/usr/bin/env zsh
-# Runs bin/t against throwaway files and checks output, exit codes and file contents.
+# Runs t against throwaway files and checks output, exit codes and file contents.
 # Usage: test/run.zsh   (exits non-zero if any check fails)
+#   T_BIN=/abs/path/to/t test/run.zsh   tests another build of t (default: bin/t, the zsh version)
 
-T_BIN="${0:A:h:h}/bin/t"
+repo=${0:A:h:h}
+T_BIN=${T_BIN:-$repo/bin/t}
+[[ $T_BIN == /* ]] || { print -r -- "T_BIN must be an absolute path (got '$T_BIN')" >&2; exit 2; }
+[[ -x $T_BIN ]] || { print -r -- "T_BIN isn't an executable file: $T_BIN" >&2; exit 2; }
+# Which implementation is under test: the zsh script or the Rust program (docs/designs/rust_port.md).
+# Checks of behaviour only one of them has run only for that one.
+if [[ $T_BIN == $repo/bin/t ]]; then impl=zsh; else impl=rust; fi
 zmodload zsh/datetime
 days_ago() { local noon; strftime -r -s noon '%F %T' "$(strftime %F $EPOCHSECONDS) 12:00:00"; strftime %F $(( noon - $1 * 86400 )); }
 today=$(date +%F); d7=$(days_ago 7); d8=$(days_ago 8)
@@ -23,6 +30,9 @@ export ZDOTDIR=$(mktemp -d); dirs+=$ZDOTDIR
 # in a real vault and write ~/.zshenv; ./install links into ~/.local/bin and edits ~/.zshrc.
 real_home=$HOME
 export HOME=$(mktemp -d); dirs+=$HOME
+# The Rust t reads a config file from $XDG_CONFIG_HOME (or %APPDATA% on Windows) and t init can write
+# it. Point both into the throwaway home too, so the real config is never read or changed.
+export XDG_CONFIG_HOME=$HOME/.config APPDATA=$HOME/AppData
 fresh() { dir=$(mktemp -d); dirs+=$dir; export TODO_FILE="$dir/Todo.md"; print -rn -- "$1" >"$TODO_FILE"; }
 file() { cat "$TODO_FILE"; }
 EMPTY=$'## Today\n\n## Later\n\n## Done\n'
@@ -30,6 +40,8 @@ EMPTY=$'## Today\n\n## Later\n\n## Done\n'
 # --- the tests' own safety ---
 [[ $HOME != "$real_home" && -d $HOME && -z "$(ls -A "$HOME")" ]]
 check "tests run with an empty, throwaway HOME" 0 $?
+[[ $XDG_CONFIG_HOME == $HOME/* && $APPDATA == $HOME/* ]]
+check "the config file t may read or write is inside the throwaway HOME" 0 $?
 out=$(unset TODO_FILE; cd /; "$T_BIN" init --obsidian </dev/null 2>&1)
 check "t init --obsidian, run without its own HOME, sees no real vaults" \
   "t: found no Obsidian vaults (Obsidian lists a vault once you've opened it); use t init <path> instead" "$out"
@@ -626,7 +638,7 @@ ready
 setup "bindkey -e; _mark() { LBUFFER+=X }; zle -N _mark; bindkey '^I' _mark"
 setup "fzf() { local a q; for a; do [[ \$a == --query=* ]] && q=\${a#--query=}; done; grep -m1 \"^\$q\" }"
 setup "_dump() { print -r -- \"\$BUFFER|\$CURSOR\" >'$widget_dump'; BUFFER=; }; zle -N _dump; bindkey '^X^D' _dump"
-setup "source '${T_BIN:h:h}/shell/t.zsh'"
+setup "source '$repo/shell/t.zsh'"
 tab() { # <typed text>: type it, press Tab, dump the line; sets $got to "BUFFER|CURSOR"
   : >"$widget_dump"; zpty -w -n TT "$1"$'\t\C-x\C-d'
   local i chunk; for i in {1..50}; do
@@ -844,7 +856,7 @@ check "tidy that archived: archived once" 1 "$(grep -c 'old' "$dir/Archive/Todo 
 
 # --- the README demo stays true ---
 # Replays every "$ t ..." line of the README's console block and compares the whole transcript.
-demo=$(awk '/^```console$/{on=1; next} on && /^```$/{exit} on' "${T_BIN:h:h}/README.md")
+demo=$(awk '/^```console$/{on=1; next} on && /^```$/{exit} on' "$repo/README.md")
 fresh "$EMPTY"
 replay=$(for cmd in ${(f)"$(grep '^\$ t ' <<<"$demo")"}; do
   print -r -- "$cmd"; TODO_JIRA_KEYS= eval "\"\$T_BIN\" ${cmd#\$ t }" 2>&1
@@ -884,8 +896,7 @@ run init;  check "init fails when the directory can't be created" 1 "$rc"
 
 # --- ./install ---
 # Always with a throwaway home: ./install edits ~/.zshrc and links into ~/.local/bin.
-inst() { out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$home/.local/bin:$fakebin:$PATH" "${T_BIN:h:h}/install" "$@" 2>&1); rc=$?; }
-repo=${T_BIN:h:h}
+inst() { out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$fakebin:$PATH" "$repo/install" "$@" 2>&1); rc=$?; }
 home=$(mktemp -d); dirs+=$home
 print -r -- 'source <(fzf --zsh)' >"$home/.zshrc"
 inst
@@ -929,7 +940,7 @@ check "install --bin off PATH: links there, warns" "0|Linked $home/elsewhere/t -
 
 home=$(mktemp -d); dirs+=$home
 for c in mkdir ln sed; do ln -sf "${commands[$c]}" "$nofzf/$c"; done
-out=$(cd /; HOME=$home ZDOTDIR=$home PATH="$home/.local/bin:$nofzf" "$repo/install" 2>&1); rc=$?
+out=$(cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData PATH="$home/.local/bin:$nofzf" "$repo/install" 2>&1); rc=$?
 check "install without fzf: Tab completion left off" "0|install: fzf isn't installed, so Tab completion is left off; install fzf and run ./install again" "$rc|${${(f)out}[2]}"
 [[ ! -e $home/.zshrc ]]; check "install without fzf: no ~/.zshrc written" 0 $?
 
@@ -945,11 +956,11 @@ vhome() { # <vault dir names...>: new $home listing these vaults (the last one m
   print -r -- "{\"vaults\":{$json,\"gone\":{\"path\":\"$home/gone\",\"ts\":99}}}" >"$reg/obsidian.json"
 }
 tinit() { # <args...>: run t as the new user, without a terminal; sets $out and $rc
-  out=$(unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home "$T_BIN" "$@" </dev/null 2>&1); rc=$?
+  out=$(unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData "$T_BIN" "$@" </dev/null 2>&1); rc=$?
 }
 ttyinit() { # <answers> <args...>: the same in a terminal, typing the answers; sets $out and $rc
   local ans=$1 buf= chunk i; shift; targs=("$@")
-  zpty -b TTY 'stty -echo; print READY; (unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home "$T_BIN" "${targs[@]}"); print -r -- "<rc=$?>"'
+  zpty -b TTY 'stty -echo; print READY; (unset TODO_FILE; cd /; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData "$T_BIN" "${targs[@]}"); print -r -- "<rc=$?>"'
   for i in {1..200}; do while zpty -r -t TTY chunk 2>/dev/null; do buf+=$chunk; done; [[ $buf == *READY* ]] && break; zselect -t 5; done
   buf=${buf#*READY$'\r\n'}
   zpty -w TTY "$ans"
@@ -1032,7 +1043,7 @@ check "init --obsidian without vaults fails" \
 
 # t init <path>: never asks; shows the ~/.zshenv line. ${home:A}: on macOS, /var is a symlink.
 home=$(mktemp -d); dirs+=$home; home=${home:A}
-out=$(unset TODO_FILE; cd "$home"; HOME=$home ZDOTDIR=$home "$T_BIN" init "lists/Todo.md" </dev/null 2>&1); rc=$?
+out=$(unset TODO_FILE; cd "$home"; HOME=$home ZDOTDIR=$home XDG_CONFIG_HOME=$home/.config APPDATA=$home/AppData "$T_BIN" init "lists/Todo.md" </dev/null 2>&1); rc=$?
 check "init <path>: relative to the current directory, shows the ~/.zshenv line" "0|Created $home/lists/Todo.md
 To use it, add this to ~/.zshenv:
   export TODO_FILE=\"\${TODO_FILE:-\$HOME/lists/Todo.md}\"" "$rc|$out"

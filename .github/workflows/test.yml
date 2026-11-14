@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ['v*']
   pull_request:
 
@@ -10,6 +10,7 @@ permissions:
   contents: read
 
 jobs:
+  # The zsh version, bin/t. Runs until the Rust port replaces it (docs/designs/rust_port.md, step S12).
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -55,3 +56,37 @@ jobs:
             echo "tag $GITHUB_REF_NAME doesn't match bin/t: got '$got', want '$want'" >&2
             exit 1
           fi
+
+  # The Rust port, on the three systems it targets.
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy rustfmt
+          cargo --version
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  # The oldest Rust the port supports (rust-version in Cargo.toml).
+  msrv:
+    name: Rust 1.89 (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust 1.89
+        run: rustup toolchain install 1.89 --profile minimal --no-self-update
+      - name: Build and test
+        run: cargo +1.89 test --locked

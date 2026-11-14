@@ -1,0 +1,20 @@
+[package]
+name = "markdone"
+version = "0.4.0-dev"
+edition = "2024"
+rust-version = "1.89"
+description = "t: personal todo lists kept as Markdown files"
+license-file = "LICENSE"
+repository = "https://github.com/sharpmist/markdone"
+publish = false
+
+[[bin]]
+name = "t"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
