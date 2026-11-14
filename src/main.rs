@@ -8,6 +8,8 @@
 #[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
+mod doc;
+#[allow(dead_code)]
 mod jira;
 #[allow(dead_code)]
 mod text;

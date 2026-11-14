@@ -46,6 +46,19 @@ So far the binary `t` implements `help` and `version`. Every other command print
 - `[jira:linkify]`: an item's text with each bare key turned into `[KEY-123](<url>KEY-123)`.
 - `[jira:keys_in]`: the keys in an item's text, for `t list --json`.
 
+### `doc.rs`: the lines of a list
+
+- `[doc:Doc]`: a list in memory. `[doc:Doc::parse]` and `[doc:Doc::to_bytes]` turn bytes into
+  lines and back.
+- `[doc:Doc::open_items]` (`[doc:Item]`: number, section, text), `[doc:Doc::rows]` (`t list`
+  rows, optionally one section's), `[doc:Doc::done_items]`, `[doc:Doc::find]` (an `<item>`
+  reference to a number), `[doc:Doc::take]`.
+- Changes, each checked before anything changes, so on error the list is as it was:
+  `[doc:Doc::insert]`, `[doc:Doc::finish]`, `[doc:Doc::remove]`, `[doc:Doc::reword]`,
+  `[doc:Doc::move_within]`, `[doc:Doc::tidy]` (`[doc:Tidied]`).
+- `[doc:Error]`: why a change can't be made; callers turn it into 0.3.0's messages.
+- `[doc:row]` (`printf "%3d  %-6s %s"`), `[doc:number]`, `[doc:done_rows]` (`t list --done`).
+
 ### `config.rs`: settings
 
 - `[config:load]`: the settings of this run (`[config:Settings]`): `todo_file` and where it came
@@ -73,6 +86,27 @@ So far the binary `t` implements `help` and `version`. Every other command print
   changes nothing.
 - **Keys for JSON** use the key test alone, at every position, so keys inside links and code
   count; each key once, in order of first appearance.
+- **Bytes.** `doc.rs` works on bytes; only matching decodes them (invalid UTF-8 as U+FFFD).
+- **Lines.** Split at LF; a CR before the LF is the line's ending, not its content. An empty file
+  has no lines. A leading UTF-8 byte order mark belongs to no line and is written back. The
+  file's line ending is CRLF when the first line ends in CRLF. Lines `t` writes or changes get
+  the file's ending; untouched lines keep theirs; a last line without LF gets the file's ending.
+  Parsing and writing an unchanged list gives back the same bytes, except that a missing final
+  newline is added.
+- **Sections.** A line starting with `## ` starts a section named by the rest of it. Items before
+  any heading are in section "". Open items (`- [ ] `) are numbered from 1 across all sections.
+  `- [X] ` and indented items are ordinary lines.
+- **Insert position.** At the end of the first section with the name, after its last non-blank
+  line (blank: only spaces and tabs).
+- **Done.** `finish` writes `- [x] <today> <text>` directly under the first `## Done` and fails
+  when the item, its text or the heading is missing.
+- **Tidy.** Links Jira keys on `- [ ] ` and `- [x] ` lines; gives today's date to done items whose
+  10 bytes after `- [x] ` don't have the shape `NNNN-NN-NN`; moves ticked items outside a Done
+  section to the top of the next `## Done` after them; takes dated done items whose date sorts
+  before the cutoff out for the archives. When a ticked item has no `## Done` after it, nothing
+  changes.
+- **Item references.** Digits only are a number (leading zeros allowed); other text must be a
+  case-insensitive, literal substring of exactly one open item's text as a terminal shows it.
 - **Settings sources.** `TODO_FILE`, `TODO_JIRA_KEYS` and `TODO_JIRA_URL` come from the
   environment variable when it is set, else the config file, else the default. An empty
   environment value stops the lookup and means the default (`~/todo/Todo.md`; Jira linking
