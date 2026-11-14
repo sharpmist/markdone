@@ -3,6 +3,13 @@
 //! The Rust port of the zsh script `bin/t`; see `docs/designs/rust_port.md`. Until the port is
 //! done, only `help` and `version` are implemented here.
 
+// Modules are declared as each port step adds them; the attribute goes once dispatch uses them
+// (step S7).
+#[allow(dead_code)]
+mod config;
+#[allow(dead_code)]
+mod text;
+
 use std::io::{self, Write};
 use std::process::ExitCode;
 
