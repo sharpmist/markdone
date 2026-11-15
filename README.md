@@ -163,7 +163,17 @@ Archives from before there were several lists (`Archive 2026.md` next to the lis
 
 ## Install
 
-On macOS or Linux, clone the repo anywhere and run `./install`:
+On macOS or Linux with [Homebrew](https://brew.sh):
+
+```sh
+brew install sharpmist/tap/markdone
+```
+
+This installs the release binary, so no Rust is needed. It doesn't edit `~/.zshrc`; to turn on
+[Tab completion](#tab-completion-zsh), add the `source` line it prints. `brew upgrade markdone`
+updates `t`, and `brew uninstall markdone` removes it. Neither touches your lists.
+
+Or clone the repo anywhere and run `./install`:
 
 ```sh
 git clone https://github.com/sharpmist/markdone.git
@@ -347,6 +357,8 @@ source <(fzf --zsh)
 source /path/to/markdone/shell/t.zsh
 ```
 
+With Homebrew, the file is at `$(brew --prefix)/opt/markdone/share/markdone/t.zsh`.
+
 The commands shown come from `t commands`, and everything else from `t complete <words>`, so
 `shell/t.zsh` doesn't need changing when commands are added.
 
@@ -367,7 +379,8 @@ The commands shown come from `t commands`, and everything else from `t complete 
 markdone 0.3 was a zsh script and read its settings from `~/.zshenv`. 0.4 is a program and doesn't
 read `~/.zshenv`:
 
-1. Run `./install` again: it builds `t` and replaces the old link.
+1. Run `./install` again: it builds `t` and replaces the old link. (Or remove that link with
+   `./install --uninstall` and install with Homebrew.)
 2. Move your settings (`TODO_FILE`, `TODO_JIRA_KEYS`, `TODO_JIRA_URL`) from `~/.zshenv` to the
    [config file](#configure). Until you do, `t` started outside zsh warns and shows the line to
    add; in zsh they still reach `t` from the environment.

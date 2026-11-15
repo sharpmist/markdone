@@ -28,6 +28,13 @@ The only coupling between the two components is the output of `t commands` and
   `${ZDOTDIR:-$HOME}/.zshrc` when fzf is installed; `--uninstall` removes exactly those. It never
   replaces another `t` (a link to 0.3's `bin/t` counts as this one), never touches the lists, and
   only warns about a `t` alias or function in `~/.zshrc`.
+- `.github/workflows/release.yml` (no contract file): on a `v*` tag, builds `t` for macOS (arm64,
+  x86_64), Linux (arm64, x86_64, musl) and Windows, and publishes `t-<version>-<target>.tar.gz`
+  (`.zip` on Windows) with `SHA256SUMS`. Each archive holds one folder with `t`, `LICENSE`,
+  `README.md` and `shell/t.zsh`. The Homebrew formula in the separate `sharpmist/homebrew-tap`
+  repository downloads these archives and installs `t` and `shell/t.zsh` from those paths, so
+  changing the names or the layout means changing the formula too
+  ([`docs/designs/homebrew.md`](./docs/designs/homebrew.md)).
 
 ## Global Invariants
 
